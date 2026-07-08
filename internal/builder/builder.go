@@ -26,10 +26,14 @@ func BuildCommand(status runtimekit.Status, sourceRoot string) (*exec.Cmd, error
 	}
 	if status.ExportScript != "" {
 		script := ". '" + strings.ReplaceAll(status.ExportScript, "'", "''") + "'; idf.py build"
-		return processutil.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script), nil
+		cmd := processutil.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script)
+		cmd.Env = runtimekit.CommandEnv(status)
+		return cmd, nil
 	}
 	if status.IDFPyPath != "" {
-		return processutil.Command(status.IDFPyPath, "build"), nil
+		cmd := processutil.Command(status.IDFPyPath, "build")
+		cmd.Env = runtimekit.CommandEnv(status)
+		return cmd, nil
 	}
 	return nil, errors.New("未找到 idf.py 或 export.ps1")
 }
@@ -59,10 +63,14 @@ func Run(ctx context.Context, status runtimekit.Status, sourceRoot string, log L
 	var wg sync.WaitGroup
 	pipe := func(scanner *bufio.Scanner) {
 		defer wg.Done()
+		scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 		for scanner.Scan() {
 			if log != nil {
 				log(scanner.Text())
 			}
+		}
+		if err := scanner.Err(); err != nil && log != nil {
+			log("日志读取失败：" + err.Error())
 		}
 	}
 	wg.Add(2)

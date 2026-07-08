@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -76,6 +77,16 @@ func TestAnalyzeZipRejectsPathTraversal(t *testing.T) {
 	_, err := AnalyzeZip(zipPath, t.TempDir())
 	if err == nil {
 		t.Fatalf("expected traversal zip to be rejected")
+	}
+}
+
+func TestAnalyzeZipMissingFileHasFriendlyMessage(t *testing.T) {
+	_, err := AnalyzeZip(filepath.Join(t.TempDir(), "missing.zip"), t.TempDir())
+	if err == nil {
+		t.Fatalf("expected missing zip error")
+	}
+	if !strings.Contains(err.Error(), "找不到固件 zip 文件") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

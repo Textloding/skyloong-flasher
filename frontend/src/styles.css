@@ -532,8 +532,32 @@ code {
   color: #b9c5d2;
 }
 
+.log-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  margin-top: 10px;
+}
+
+.log-toolbar span {
+  min-width: 0;
+  color: #95a3b4;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.secondary.mini {
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 12px;
+  font-size: 12px;
+}
+
 pre {
-  max-height: 220px;
+  height: clamp(260px, 34dvh, 460px);
+  max-height: none;
   overflow: auto;
   padding: 14px;
   color: #b8c6d7;
@@ -543,6 +567,24 @@ pre {
   font-size: 12px;
   line-height: 1.6;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  scrollbar-color: rgba(139, 216, 188, 0.56) rgba(255, 255, 255, 0.06);
+  scrollbar-width: thin;
+}
+
+pre::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+pre::-webkit-scrollbar-track {
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+pre::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(139, 216, 188, 0.56);
 }
 
 @media (max-width: 980px) {
@@ -577,6 +619,10 @@ pre {
 
   .device-list {
     max-height: 320px;
+  }
+
+  .log-toolbar {
+    grid-template-columns: 1fr;
   }
 
   h1 {

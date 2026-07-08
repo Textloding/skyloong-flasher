@@ -12,6 +12,10 @@ export function CheckRuntime():Promise<runtimekit.Status>;
 
 export function DownloadAndAnalyzeGithub(arg1:main.GitHubRequest):Promise<main.AnalyzeResponse>;
 
+export function GetLogFilePath():Promise<string>;
+
+export function GetLogHistory():Promise<Array<string>>;
+
 export function OpenFirmwareZip():Promise<string>;
 
 export function PreviewFlashCommand(arg1:main.FlashRequest):Promise<string>;

@@ -18,10 +18,13 @@ import (
 )
 
 type App struct {
-	ctx      context.Context
-	mu       sync.Mutex
-	current  *packagekit.Analysis
-	cacheDir string
+	ctx        context.Context
+	mu         sync.Mutex
+	current    *packagekit.Analysis
+	cacheDir   string
+	logMu      sync.Mutex
+	logHistory []string
+	logFile    string
 }
 
 type AnalyzeResponse struct {
@@ -49,7 +52,16 @@ func (a *App) startup(ctx context.Context) {
 	if a.cacheDir == "" || a.cacheDir == "SkyloongFlasher" {
 		a.cacheDir = filepath.Join(os.TempDir(), "SkyloongFlasher")
 	}
-	_ = os.MkdirAll(a.cacheDir, 0o755)
+	if err := a.prepareCacheDirs(); err != nil {
+		a.cacheDir = filepath.Join(os.TempDir(), "SkyloongFlasher")
+		_ = a.prepareCacheDirs()
+	}
+	_ = a.prepareLogFile()
+	a.logLine("SKYLOONG Flasher 已启动")
+	a.logLine("缓存目录：" + a.cacheDir)
+	if a.logFile != "" {
+		a.logLine("日志文件：" + a.logFile)
+	}
 }
 
 func (a *App) OpenFirmwareZip() (string, error) {
@@ -62,22 +74,34 @@ func (a *App) OpenFirmwareZip() (string, error) {
 }
 
 func (a *App) AnalyzeLocalZip(path string) (*AnalyzeResponse, error) {
+	if err := a.prepareCacheDirs(); err != nil {
+		return nil, friendlyError("缓存文件夹准备失败", err)
+	}
+	a.logLine("开始解析本地固件包：" + path)
 	a.progress("解析固件包", 8, "正在读取 zip 文件")
 	analysis, err := packagekit.AnalyzeZip(path, filepath.Join(a.cacheDir, "packages"))
 	if err != nil {
+		a.logLine("固件包解析失败：" + err.Error())
 		return nil, friendlyError("固件包解析失败", err)
 	}
+	a.logLine("固件包解析完成：" + analysis.ProjectName)
 	a.progress("解析固件包", 100, "固件包解析完成")
 	return a.withState(analysis)
 }
 
 func (a *App) DownloadAndAnalyzeGithub(req GitHubRequest) (*AnalyzeResponse, error) {
+	if err := a.prepareCacheDirs(); err != nil {
+		return nil, friendlyError("缓存文件夹准备失败", err)
+	}
 	spec, err := githubsource.Parse(req.URL)
 	if err != nil {
+		a.logLine("GitHub 链接解析失败：" + err.Error())
 		return nil, friendlyError("GitHub 链接解析失败", err)
 	}
 	archiveURL := spec.ArchiveURL()
 	dest := filepath.Join(a.cacheDir, "downloads", fmt.Sprintf("%s-%s-%d.zip", spec.Repo, safeRef(spec.Ref), time.Now().Unix()))
+	a.logLine("开始下载 GitHub 压缩包：" + archiveURL)
+	a.logLine("下载保存位置：" + dest)
 	a.progress("下载 GitHub 压缩包", 1, "正在连接 GitHub")
 	a.emit("download:status", map[string]interface{}{"message": "开始下载 GitHub 压缩包", "url": archiveURL})
 	err = githubsource.Download(a.ctx, archiveURL, dest, func(downloaded int64, total int64) {
@@ -89,8 +113,10 @@ func (a *App) DownloadAndAnalyzeGithub(req GitHubRequest) (*AnalyzeResponse, err
 		a.emit("download:progress", map[string]interface{}{"downloaded": downloaded, "total": total})
 	})
 	if err != nil {
+		a.logLine("GitHub 下载失败：" + err.Error())
 		return nil, friendlyError("GitHub 下载失败", err)
 	}
+	a.logLine("GitHub 压缩包下载完成：" + dest)
 	a.progress("下载 GitHub 压缩包", 100, "下载完成，开始解析")
 	return a.AnalyzeLocalZip(dest)
 }
@@ -110,6 +136,9 @@ func (a *App) CheckRuntime() runtimekit.Status {
 }
 
 func (a *App) BuildSourcePackage() (*AnalyzeResponse, error) {
+	if err := a.prepareCacheDirs(); err != nil {
+		return nil, friendlyError("缓存文件夹准备失败", err)
+	}
 	a.mu.Lock()
 	analysis := a.current
 	a.mu.Unlock()
@@ -118,21 +147,34 @@ func (a *App) BuildSourcePackage() (*AnalyzeResponse, error) {
 	}
 	status, err := a.ensureRuntime()
 	if err != nil {
+		a.logLine("构建环境准备失败：" + err.Error())
 		return nil, friendlyError("构建环境准备失败", err)
 	}
+	a.logLine("开始构建源码包：" + analysis.Root)
 	a.progress("构建固件", 5, "正在启动 ESP-IDF 构建")
 	err = builder.Run(a.ctx, status, analysis.Root, func(line string) {
 		a.progress("构建固件", estimateBuildPercent(line), line)
-		a.emit("flash:log", map[string]interface{}{"line": line})
+		a.logLine(line)
 	})
 	if err != nil {
+		a.logLine("源码构建失败：" + err.Error())
 		return nil, friendlyError("源码构建失败", err)
 	}
 	a.progress("构建固件", 92, "构建完成，正在重新解析刷机产物")
-	built, err := packagekit.AnalyzeDir(filepath.Join(analysis.Root, "build"))
+	buildDir := filepath.Join(analysis.Root, "build")
+	if info, err := os.Stat(buildDir); err != nil || !info.IsDir() {
+		if err == nil {
+			err = fmt.Errorf("路径不是文件夹：%s", buildDir)
+		}
+		a.logLine("构建后没有找到 build 文件夹：" + err.Error())
+		return nil, friendlyError("构建产物解析失败", fmt.Errorf("构建命令结束了，但没有生成 build 文件夹，请在高级日志中查看前面的构建错误：%w", err))
+	}
+	built, err := packagekit.AnalyzeDir(buildDir)
 	if err != nil {
+		a.logLine("构建产物解析失败：" + err.Error())
 		return nil, friendlyError("构建产物解析失败", err)
 	}
+	a.logLine("源码构建完成，刷机产物已准备好")
 	a.progress("构建固件", 100, "构建产物已准备好，可以刷机")
 	return a.withState(built)
 }
@@ -145,17 +187,19 @@ func (a *App) StartFlash(req FlashRequest) error {
 		return friendlyError("无法刷机", fmt.Errorf("请先选择并解析固件包"))
 	}
 	status := runtimekit.DetectIn(a.cacheDir)
-	if !status.Available {
+	if !status.Available || (status.Kind == runtimekit.KindEIM && status.GitPath == "") {
 		var err error
 		status, err = a.ensureRuntime()
 		if err != nil {
+			a.logLine("刷机运行时准备失败：" + err.Error())
 			return friendlyError("刷机运行时准备失败", err)
 		}
 	}
+	a.logLine(fmt.Sprintf("开始刷机：端口=%s，波特率=%d", req.Port, req.Baud))
 	a.progress("刷机", 5, "正在启动刷机进程")
 	return flasher.Run(a.ctx, status, analysis, req.Port, req.Baud, func(line string) {
 		a.progress("刷机", estimateFlashPercent(line), line)
-		a.emit("flash:log", map[string]interface{}{"line": line})
+		a.logLine(line)
 	})
 }
 
@@ -186,11 +230,75 @@ func (a *App) withState(analysis *packagekit.Analysis) (*AnalyzeResponse, error)
 }
 
 func (a *App) ensureRuntime() (runtimekit.Status, error) {
+	if err := a.prepareCacheDirs(); err != nil {
+		return runtimekit.Status{}, err
+	}
+	a.logLine("开始准备构建/刷机运行时")
+	a.logLine("工具会自动准备：便携 Git、EIM CLI、ESP-IDF、Python、CMake、Ninja、交叉编译器、esptool 和组件依赖")
 	return runtimekit.Ensure(a.ctx, a.cacheDir, func(stage string, percent int, message string) {
 		a.progress(stage, percent, message)
 	}, func(line string) {
-		a.emit("flash:log", map[string]interface{}{"line": line})
+		a.logLine(line)
 	})
+}
+
+func (a *App) GetLogHistory() []string {
+	a.logMu.Lock()
+	defer a.logMu.Unlock()
+	return append([]string{}, a.logHistory...)
+}
+
+func (a *App) GetLogFilePath() string {
+	return a.logFile
+}
+
+func (a *App) prepareCacheDirs() error {
+	if a.cacheDir == "" {
+		a.cacheDir = filepath.Join(os.TempDir(), "SkyloongFlasher")
+	}
+	for _, dir := range []string{
+		a.cacheDir,
+		filepath.Join(a.cacheDir, "downloads"),
+		filepath.Join(a.cacheDir, "packages"),
+		filepath.Join(a.cacheDir, "runtime"),
+		filepath.Join(a.cacheDir, "tools"),
+		filepath.Join(a.cacheDir, "logs"),
+	} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("无法创建文件夹 %s：%w", dir, err)
+		}
+	}
+	return nil
+}
+
+func (a *App) prepareLogFile() error {
+	if err := os.MkdirAll(filepath.Join(a.cacheDir, "logs"), 0o755); err != nil {
+		return fmt.Errorf("无法创建日志文件夹：%w", err)
+	}
+	a.logFile = filepath.Join(a.cacheDir, "logs", time.Now().Format("20060102-150405")+".log")
+	file, err := os.OpenFile(a.logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return fmt.Errorf("无法创建日志文件：%w", err)
+	}
+	return file.Close()
+}
+
+func (a *App) logLine(line string) {
+	if line == "" {
+		return
+	}
+	a.logMu.Lock()
+	a.logHistory = append(a.logHistory, line)
+	logFile := a.logFile
+	a.logMu.Unlock()
+
+	if logFile != "" {
+		if file, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); err == nil {
+			_, _ = file.WriteString(time.Now().Format("15:04:05 ") + line + "\n")
+			_ = file.Close()
+		}
+	}
+	a.emit("flash:log", map[string]interface{}{"line": line})
 }
 
 func (a *App) emit(name string, payload interface{}) {

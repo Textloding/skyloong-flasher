@@ -43,6 +43,22 @@ func TestEIMDownloadSourcesPreferEspressifMirrors(t *testing.T) {
 	}
 }
 
+func TestGitDownloadSourcesPreferDomesticMirrors(t *testing.T) {
+	sources := GitDownloadSources()
+	if len(sources) < 3 {
+		t.Fatalf("expected Git mirror fallback sources, got %#v", sources)
+	}
+	if !strings.Contains(sources[0], "mirrors.huaweicloud.com/git-for-windows") {
+		t.Fatalf("first Git source should be Huawei Cloud mirror, got %q", sources[0])
+	}
+	if !strings.Contains(sources[1], "registry.npmmirror.com") {
+		t.Fatalf("second Git source should be npmmirror, got %q", sources[1])
+	}
+	if !strings.Contains(sources[len(sources)-1], "github.com/git-for-windows/git") {
+		t.Fatalf("last Git source should be GitHub fallback, got %q", sources[len(sources)-1])
+	}
+}
+
 func TestEIMInstallCommandUsesEspressifMirrorEnvironment(t *testing.T) {
 	cmd := EIMInstallCommand(`C:\tools\eim.exe`, `C:\cache\eim`, `C:\cache\runtime`, "v5.1.4")
 	env := strings.Join(cmd.Env, "\n")
@@ -58,12 +74,33 @@ func TestEIMInstallCommandUsesEspressifMirrorEnvironment(t *testing.T) {
 	}
 }
 
+func TestEIMInstallCommandPrefixesPortableGitPath(t *testing.T) {
+	cmd := EIMInstallCommand(`C:\tools\eim.exe`, `C:\cache\eim`, `C:\cache\runtime`, "v5.1.4", `C:\cache\tools\git\cmd\git.exe`)
+	pathValue := envValue(cmd.Env, "PATH")
+	if pathValue == "" {
+		t.Fatalf("expected PATH in env: %#v", cmd.Env)
+	}
+	for _, want := range []string{
+		`C:\cache\tools\git\cmd`,
+		`C:\cache\tools\git\mingw64\bin`,
+		`C:\cache\tools\git\usr\bin`,
+	} {
+		if !strings.Contains(pathValue, want) {
+			t.Fatalf("PATH %q missing %q", pathValue, want)
+		}
+	}
+	if !strings.HasPrefix(pathValue, `C:\cache\tools\git\cmd;`) {
+		t.Fatalf("portable Git cmd dir should be first in PATH, got %q", pathValue)
+	}
+}
+
 func TestEIMRunCommandWrapsCommandAndVersion(t *testing.T) {
 	status := Status{
 		Kind:        KindEIM,
 		EIMPath:     `C:\tools\eim.exe`,
 		EIMJsonPath: `C:\cache\eim`,
 		IDFVersion:  "v5.1.4",
+		GitPath:     `C:\cache\tools\git\cmd\git.exe`,
 	}
 
 	cmd := EIMRunCommand(status, "idf.py", "build")
@@ -79,6 +116,9 @@ func TestEIMRunCommandWrapsCommandAndVersion(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("run command %q missing %q", got, want)
 		}
+	}
+	if pathValue := envValue(cmd.Env, "PATH"); !strings.HasPrefix(pathValue, `C:\cache\tools\git\cmd;`) {
+		t.Fatalf("portable Git cmd dir should be first in PATH, got %q", pathValue)
 	}
 }
 
@@ -132,4 +172,52 @@ func TestDetectCachedEIMUsesPortableRuntimeLayout(t *testing.T) {
 	if status.EIMPath != eimPath {
 		t.Fatalf("EIMPath = %q, want %q", status.EIMPath, eimPath)
 	}
+}
+
+func TestDetectCachedGitUsesToolCacheLayout(t *testing.T) {
+	root := t.TempDir()
+	gitPath := filepath.Join(root, "tools", "git", "cmd", "git.exe")
+	if err := os.MkdirAll(filepath.Dir(gitPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(gitPath, []byte("probe"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	got, ok := detectCachedGit(root)
+	if !ok {
+		t.Fatalf("expected cached Git to be detected")
+	}
+	if got != gitPath {
+		t.Fatalf("git path = %q, want %q", got, gitPath)
+	}
+}
+
+func TestDetectCachedGitUsesPortableRuntimeLayout(t *testing.T) {
+	root := t.TempDir()
+	gitPath := filepath.Join(root, "runtime", "tools", "git", "cmd", "git.exe")
+	if err := os.MkdirAll(filepath.Dir(gitPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(gitPath, []byte("probe"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	got, ok := detectCachedGit(root)
+	if !ok {
+		t.Fatalf("expected portable runtime Git to be detected")
+	}
+	if got != gitPath {
+		t.Fatalf("git path = %q, want %q", got, gitPath)
+	}
+}
+
+func envValue(env []string, key string) string {
+	for _, item := range env {
+		gotKey, value, ok := strings.Cut(item, "=")
+		if ok && strings.EqualFold(gotKey, key) {
+			return value
+		}
+	}
+	return ""
 }

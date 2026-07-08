@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 type FlashFile = { offset: string; path: string; size: number };
 type Analysis = {
@@ -21,6 +21,7 @@ type RuntimeStatus = {
   pythonPath: string;
   idfPyPath: string;
   exportScript: string;
+  gitPath: string;
   message: string;
 };
 type Device = { name: string; port: string; pnpDeviceId: string; mode: string; canFlash: boolean; score: number; hint: string };
@@ -53,16 +54,16 @@ function App() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [selectedPort, setSelectedPort] = useState("");
   const [logs, setLogs] = useState<string[]>(["等待选择固件包。"]);
+  const [logFilePath, setLogFilePath] = useState("");
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState("");
   const [taskProgress, setTaskProgress] = useState<TaskProgress>({ stage: "待命", percent: 0, message: "选择固件来源后开始。" });
   const [error, setError] = useState("");
+  const logRef = useRef<HTMLPreElement | null>(null);
 
   useEffect(() => {
-    void refreshRuntime();
-    void scanDevices(false);
     const offLog = window.runtime?.EventsOn?.("flash:log", (payload) => {
-      setLogs((items) => [...items.slice(-160), payload.line]);
+      setLogs((items) => [...items, payload.line]);
     });
     const offDownload = window.runtime?.EventsOn?.("download:progress", (payload) => {
       if (payload.total > 0) {
@@ -78,12 +79,20 @@ function App() {
         message: payload.message ?? "",
       });
     });
+    void loadLogHistory();
+    void refreshRuntime();
+    void scanDevices(false);
     return () => {
       offLog?.();
       offDownload?.();
       offTask?.();
     };
   }, []);
+
+  useEffect(() => {
+    const node = logRef.current;
+    if (node) node.scrollTop = node.scrollHeight;
+  }, [logs]);
 
   const activeStep = useMemo(() => {
     if (!analysis) return 0;
@@ -100,6 +109,24 @@ function App() {
     const next = await call<RuntimeStatus>("CheckRuntime");
     setRuntime(next);
     setTaskProgress({ stage: "检查环境", percent: 100, message: next.message || "环境检查完成。" });
+  }
+
+  async function loadLogHistory() {
+    try {
+      const [history, path] = await Promise.all([
+        call<string[]>("GetLogHistory"),
+        call<string>("GetLogFilePath"),
+      ]);
+      if (history.length > 0) {
+        setLogs((items) => {
+          const onlyPlaceholder = items.length === 1 && items[0] === "等待选择固件包。";
+          return onlyPlaceholder ? history : [...history, ...items.filter((item) => item !== "等待选择固件包。")];
+        });
+      }
+      if (path) setLogFilePath(path);
+    } catch {
+      // 浏览器预览模式下没有后端日志历史，保留本地占位日志即可。
+    }
   }
 
   async function scanDevices(showProgress = true) {
@@ -144,8 +171,9 @@ function App() {
       setLogs((items) => [...items, ...(result.analysis.messages ?? []), "固件来源解析完成。"]);
       setTaskProgress({ stage: "解析固件包", percent: 100, message: "固件来源解析完成。" });
     } catch (err) {
-      setError(String(err));
+      setError(userFacingError(err));
       setTaskProgress({ stage: "任务失败", percent: 100, message: "请查看错误提示和高级日志。" });
+      setLogs((items) => [...items, `解析失败：${String(err)}`]);
     } finally {
       setBusy(false);
     }
@@ -164,7 +192,7 @@ function App() {
       setTaskProgress({ stage: "构建固件", percent: 100, message: "构建完成，可以开始刷机。" });
       setLogs((items) => [...items, "源码构建完成，刷机产物已准备好。"]);
     } catch (err) {
-      setError(String(err));
+      setError(userFacingError(err));
       setTaskProgress({ stage: "构建失败", percent: 100, message: "请查看错误提示和高级日志。" });
       setLogs((items) => [...items, `构建失败：${String(err)}`]);
     } finally {
@@ -182,11 +210,21 @@ function App() {
       setLogs((items) => [...items, "刷机命令执行完成，等待设备重启。"]);
       setTaskProgress({ stage: "刷机", percent: 100, message: "刷机命令执行完成，等待设备重启。" });
     } catch (err) {
-      setError(String(err));
+      setError(userFacingError(err));
       setLogs((items) => [...items, `刷机失败：${String(err)}`]);
       setTaskProgress({ stage: "刷机失败", percent: 100, message: "连接或刷写失败，请查看高级日志。" });
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function copyLogs() {
+    const text = logs.join("\n");
+    try {
+      await navigator.clipboard?.writeText(text);
+      setLogs((items) => [...items, "日志已复制到剪贴板。"]);
+    } catch {
+      setLogs((items) => [...items, "日志复制失败，请直接选中高级日志内容复制。"]);
     }
   }
 
@@ -339,8 +377,12 @@ function App() {
             {flashButtonText}
           </button>
           <details className="logs" open>
-            <summary>高级日志</summary>
-            <pre>{logs.join("\n")}</pre>
+            <summary>高级日志（完整记录）</summary>
+            <div className="log-toolbar">
+              <span>{logFilePath ? `日志文件：${logFilePath}` : "当前会话日志会从开头保留到最后。"}</span>
+              <button className="secondary mini" type="button" onClick={copyLogs}>复制日志</button>
+            </div>
+            <pre ref={logRef}>{logs.join("\n")}</pre>
           </details>
         </div>
       </section>
@@ -381,10 +423,35 @@ function shortPath(path: string) {
   return path.split(/[\\/]/).slice(-2).join("/");
 }
 
+function userFacingError(err: unknown) {
+  const raw = String(err ?? "").replace(/^Error:\s*/i, "");
+  const lower = raw.toLowerCase();
+  if (lower.includes("git was not found") || lower.includes("git not found") || lower.includes("failed to get git path")) {
+    return "工具没有成功准备 Git 运行时。请重新点击“准备环境并构建”，工具会自动下载便携 Git；如果仍失败，请使用离线完整版。";
+  }
+  if (
+    raw.includes("便携 Git 下载或解压失败") ||
+    raw.includes("EIM CLI 下载失败") ||
+    lower.includes("wsarecv") ||
+    lower.includes("timed out") ||
+    lower.includes("timeout") ||
+    lower.includes("connection attempt failed")
+  ) {
+    return "构建环境下载失败。请稍后重试，或使用离线完整版；工具会优先尝试国内镜像，详细失败原因在高级日志里。";
+  }
+  if (raw.includes("ESP-IDF 自动安装失败")) {
+    return "ESP-IDF 构建环境自动准备失败。请先重试一次；如果网络较慢，等待界面进度继续变化，不需要打开命令行。详细原因在高级日志里。";
+  }
+  if (raw.includes("源码构建失败")) {
+    return "源码构建失败。请确认选择的是支持 ESP-IDF v5.1.4 的固件源码包；详细构建日志在高级日志里。";
+  }
+  return raw || "任务失败，请查看高级日志。";
+}
+
 async function mockCall(name: string, ...args: any[]): Promise<any> {
   await new Promise((resolve) => setTimeout(resolve, 240));
   if (name === "CheckRuntime") {
-    return { available: false, canBuild: false, kind: "missing", toolPath: "", pythonPath: "", idfPyPath: "", exportScript: "", message: "浏览器预览模式：未连接 Go 后端" };
+    return { available: false, canBuild: false, kind: "missing", toolPath: "", pythonPath: "", idfPyPath: "", exportScript: "", gitPath: "", message: "浏览器预览模式：未连接 Go 后端" };
   }
   if (name === "ScanDevices") {
     return [
@@ -412,10 +479,12 @@ async function mockCall(name: string, ...args: any[]): Promise<any> {
           { offset: "0x20000", path: "GK87-Screen.bin", size: 4994032 },
         ],
       },
-      runtime: { available: false, canBuild: false, kind: "missing", toolPath: "", pythonPath: "", idfPyPath: "", exportScript: "", message: "浏览器预览模式" },
+      runtime: { available: false, canBuild: false, kind: "missing", toolPath: "", pythonPath: "", idfPyPath: "", exportScript: "", gitPath: "", message: "浏览器预览模式" },
       devices: await mockCall("ScanDevices"),
     };
   }
+  if (name === "GetLogHistory") return ["浏览器预览模式：等待连接桌面后端。"];
+  if (name === "GetLogFilePath") return "";
   if (name === "BuildSourcePackage") {
     return mockCall("AnalyzeLocalZip", "preview.zip");
   }

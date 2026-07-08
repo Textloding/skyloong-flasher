@@ -178,6 +178,7 @@ export namespace runtimekit {
 	    eimPath: string;
 	    eimJsonPath: string;
 	    idfVersion: string;
+	    gitPath: string;
 	    message: string;
 	
 	    static createFrom(source: any = {}) {
@@ -196,6 +197,7 @@ export namespace runtimekit {
 	        this.eimPath = source["eimPath"];
 	        this.eimJsonPath = source["eimJsonPath"];
 	        this.idfVersion = source["idfVersion"];
+	        this.gitPath = source["gitPath"];
 	        this.message = source["message"];
 	    }
 	}

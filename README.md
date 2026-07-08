@@ -15,13 +15,13 @@ SKYLOONG Flasher 是一个独立的 Windows 桌面刷机工具，面向 SKYLOONG
 - 选择本地固件 zip。
 - 输入 GitHub 仓库、分支或 zip 链接并下载。
 - 自动解析 `flasher_args.json` 或 `flash_args`。
-- 识别 ESP-IDF 源码包；没有本机 ESP-IDF 时也会自动下载并准备构建环境。
+- 识别 ESP-IDF 源码包；没有本机 Git、Python、CMake、Ninja、ESP-IDF、交叉编译器、esptool 等基础环境时也会自动准备。
 - 扫描 Windows COM/PnP 设备。
 - 区分 SKYLOONG 键盘运行态 `VID_34BF&PID_FF0E` 和 ESP32-S3 下载态 `VID_303A&PID_1001`。
 - 检测本机、缓存和离线包内置的 esptool/ESP-IDF runtime。
 - 生成并执行 esptool 刷机命令。
 - 现代毛玻璃中文向导界面。
-- 下载、解析、扫描和刷机时显示实时阶段、进度条和高级日志。
+- 下载、解析、扫描、构建和刷机时显示实时阶段、进度条和完整高级日志。
 
 ## 普通用户怎么用
 
@@ -33,11 +33,11 @@ SKYLOONG Flasher 是一个独立的 Windows 桌面刷机工具，面向 SKYLOONG
    - GitHub zip 链接。
 3. 点击“解析固件”。
 4. 如果工具提示“可直接刷”，按界面提示连接屏幕并进入下载模式。
-5. 如果工具提示“需要构建”，直接点击“准备环境并构建”。工具会自动下载 EIM CLI 和 ESP-IDF v5.1.4，并在界面里显示当前下载源、进度和日志。
+5. 如果工具提示“需要构建”，直接点击“准备环境并构建”。工具会自动准备便携 Git、EIM CLI、ESP-IDF v5.1.4、Python、CMake、Ninja、交叉编译器、esptool 和构建所需组件依赖，并在界面里显示当前下载源、进度和日志。
 6. 工具检测到 ESP32-S3 刷机串口后，点击“开始刷机”。
 7. 刷机完成后等待设备自动重启。
 
-整个过程中，界面会显示当前阶段、百分比、提示文字和高级日志。用户不需要打开命令行。
+整个过程中，界面会显示当前阶段、百分比、提示文字和高级日志。用户不需要打开命令行，也不需要理解 Git、Python、ESP-IDF 等技术环境。
 
 ## 支持的固件来源
 
@@ -65,11 +65,35 @@ https://github.com/Textloding/SKYLOONG/tree/idf-v5.1.4
 https://github.com/Textloding/SKYLOONG/archive/refs/heads/main.zip
 ```
 
-如果下载到的是源码包，工具会先识别为“需要构建”。用户不需要手动安装 ESP-IDF，点击“准备环境并构建”后，工具会自动准备构建环境并继续构建。
+如果下载到的是源码包，工具会先识别为“需要构建”。用户不需要手动安装 Git、Python、CMake、Ninja、ESP-IDF、编译器或 esptool，也不需要打开命令行。点击“准备环境并构建”后，工具会自动准备构建环境并继续构建。
 
-首次自动准备 ESP-IDF 会下载较多文件，耗时取决于网络。工具会优先使用乐鑫国内镜像 `dl.espressif.cn`，失败后自动切换乐鑫国际镜像，最后才尝试 GitHub。准备完成后会缓存在本机，后续构建会直接复用。
+首次自动准备环境会下载较多文件，耗时取决于网络。工具会先准备便携 Git，然后通过 EIM CLI 安装 ESP-IDF v5.1.4。Git 会优先使用华为云镜像，其次 npmmirror，最后才尝试 GitHub；EIM CLI 和 ESP-IDF 资源会优先使用乐鑫国内镜像 `dl.espressif.cn`，失败后自动切换备用源。准备完成后会缓存在本机，后续构建会直接复用。
 
-网络较差的用户，后续可以下载离线完整版压缩包。离线包会把 `runtime` 目录放在 exe 同级，工具启动后会优先识别这个内置运行时。
+网络较差的用户，后续可以下载离线完整版压缩包。离线包建议把以下目录放在 exe 同级，工具启动后会优先识别这些内置运行时：
+
+```text
+SKYLOONG-Flasher.exe
+runtime/
+  tools/
+    git/
+    eim.exe
+  eim-config/
+  esp-idf/
+```
+
+普通在线版也会把下载好的运行时缓存到用户目录，例如 `%LOCALAPPDATA%\SkyloongFlasher\tools\git` 和 `%LOCALAPPDATA%\SkyloongFlasher\runtime`。用户不需要修改系统 PATH，也不会弹出 PowerShell。
+
+工具启动时会主动创建这些工作文件夹：
+
+```text
+%LOCALAPPDATA%\SkyloongFlasher\downloads
+%LOCALAPPDATA%\SkyloongFlasher\packages
+%LOCALAPPDATA%\SkyloongFlasher\runtime
+%LOCALAPPDATA%\SkyloongFlasher\tools
+%LOCALAPPDATA%\SkyloongFlasher\logs
+```
+
+如果用户目录权限异常，工具会尝试退回到系统临时目录，并在高级日志里记录实际使用的缓存目录。
 
 ## 设备识别说明
 
@@ -98,10 +122,13 @@ https://github.com/Textloding/SKYLOONG/archive/refs/heads/main.zip
 
 - GitHub 下载进度。
 - zip 解析状态。
+- 便携 Git 自动下载、解压和缓存进度。
 - ESP-IDF 自动下载、安装和缓存进度，包含当前下载源和失败切换提示。
 - ESP-IDF 构建日志。
 - 设备扫描结果。
 - esptool 刷机日志。
+- 日志从任务开始保留到最后，不再只显示末尾部分。
+- 每次启动会生成本地日志文件，界面会显示日志文件路径，并提供“复制日志”按钮。
 
 ## 开发运行
 
@@ -118,6 +145,18 @@ go test ./...
 wails dev
 wails build
 ```
+
+## 常见问题
+
+### 提示构建环境下载失败怎么办？
+
+先让用户直接在工具里重试一次。工具会自动切换华为云、npmmirror、乐鑫镜像和 GitHub 等多个来源，不需要用户复制命令。
+
+如果多次失败，通常是网络无法访问镜像源或公司/校园网络拦截下载。建议改用离线完整版，或者换一个网络后重新点击“准备环境并构建”。
+
+### 提示缺少 Git 怎么办？
+
+新版会自动下载便携 Git，不要求用户安装系统 Git。如果高级日志中仍出现 `Git was not found` 或 `git not found`，请确认正在使用新版 exe，并重新点击“准备环境并构建”。离线完整版需要包含 `runtime/tools/git/cmd/git.exe`。
 
 ## 发布建议
 

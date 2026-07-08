@@ -55,12 +55,17 @@ func AnalyzeZip(zipPath string, workspace string) (*Analysis, error) {
 	if zipPath == "" {
 		return nil, errors.New("请选择固件 zip 文件")
 	}
+	if info, err := os.Stat(zipPath); err != nil {
+		return nil, fmt.Errorf("找不到固件 zip 文件：%s", zipPath)
+	} else if info.IsDir() {
+		return nil, fmt.Errorf("选择的是文件夹，不是固件 zip 文件：%s", zipPath)
+	}
 	if workspace == "" {
 		workspace = os.TempDir()
 	}
 	root := filepath.Join(workspace, "skyloong-package-"+time.Now().Format("20060102150405"))
 	if err := os.MkdirAll(root, 0o755); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("无法创建固件解压文件夹：%w", err)
 	}
 	extracted, err := ExtractZip(zipPath, root)
 	if err != nil {

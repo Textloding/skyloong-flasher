@@ -1,6 +1,7 @@
 package runtimekit
 
 import (
+	"archive/zip"
 	"bufio"
 	"context"
 	"errors"
@@ -24,6 +25,9 @@ const (
 
 	DefaultIDFVersion = "v5.1.4"
 	eimAssetPath      = "espressif/idf-im-ui/releases/download/v0.17.0/eim-cli-windows-x64.exe"
+	gitVersion        = "2.53.0"
+	gitWindowsVersion = "v2.53.0.windows.1"
+	gitAssetName      = "MinGit-2.53.0-64-bit.zip"
 )
 
 type Status struct {
@@ -37,6 +41,7 @@ type Status struct {
 	EIMPath      string `json:"eimPath"`
 	EIMJsonPath  string `json:"eimJsonPath"`
 	IDFVersion   string `json:"idfVersion"`
+	GitPath      string `json:"gitPath"`
 	Message      string `json:"message"`
 }
 
@@ -79,21 +84,27 @@ func Detect() Status {
 func DetectIn(cacheDir string) Status {
 	status := Detect()
 	if status.CanBuild && status.Available {
-		return status
+		return withGitStatus(status, cacheDir)
 	}
 	if cached, ok := detectCachedEIM(cacheDir); ok {
-		return cached
+		return withGitStatus(cached, cacheDir)
 	}
-	return status
+	return withGitStatus(status, cacheDir)
 }
 
 func Ensure(ctx context.Context, cacheDir string, progress ProgressFunc, log LogFunc) (Status, error) {
-	status := DetectIn(cacheDir)
-	if status.CanBuild && status.Available {
-		return status, nil
-	}
 	if cacheDir == "" {
 		return Status{}, errors.New("运行时缓存目录为空")
+	}
+
+	status := DetectIn(cacheDir)
+	gitPath, err := ensureGit(ctx, cacheDir, progress, log)
+	if err != nil {
+		return Status{}, err
+	}
+	status.GitPath = gitPath
+	if status.CanBuild && status.Available {
+		return status, nil
 	}
 
 	if progress != nil {
@@ -116,7 +127,7 @@ func Ensure(ctx context.Context, cacheDir string, progress ProgressFunc, log Log
 	if progress != nil {
 		progress("安装 ESP-IDF", 35, "正在下载并安装 ESP-IDF v5.1.4，首次执行会比较久")
 	}
-	cmd := EIMInstallCommand(eimPath, configDir, installDir, DefaultIDFVersion)
+	cmd := EIMInstallCommand(eimPath, configDir, installDir, DefaultIDFVersion, gitPath)
 	installPercent := 35
 	if err := runLogged(ctx, cmd, func(line string) {
 		if log != nil {
@@ -134,10 +145,12 @@ func Ensure(ctx context.Context, cacheDir string, progress ProgressFunc, log Log
 	if progress != nil {
 		progress("安装 ESP-IDF", 100, "ESP-IDF 构建环境已准备好")
 	}
-	return eimStatus(eimPath, configDir), nil
+	status = eimStatus(eimPath, configDir)
+	status.GitPath = gitPath
+	return status, nil
 }
 
-func EIMInstallCommand(eimPath string, configDir string, installDir string, version string) *exec.Cmd {
+func EIMInstallCommand(eimPath string, configDir string, installDir string, version string, gitPaths ...string) *exec.Cmd {
 	cmd := processutil.Command(
 		eimPath,
 		"install",
@@ -152,7 +165,7 @@ func EIMInstallCommand(eimPath string, configDir string, installDir string, vers
 		"--pypi-mirror", "https://pypi.tuna.tsinghua.edu.cn/simple",
 		"--esp-idf-json-path", configDir,
 	)
-	cmd.Env = mirrorEnv(os.Environ())
+	cmd.Env = mirrorEnv(os.Environ(), gitPaths...)
 	return cmd
 }
 
@@ -166,8 +179,12 @@ func EIMRunCommand(status Status, args ...string) *exec.Cmd {
 		cmdArgs = append(cmdArgs, status.IDFVersion)
 	}
 	cmd := processutil.Command(status.EIMPath, cmdArgs...)
-	cmd.Env = mirrorEnv(os.Environ())
+	cmd.Env = mirrorEnv(os.Environ(), status.GitPath)
 	return cmd
+}
+
+func CommandEnv(status Status) []string {
+	return mirrorEnv(os.Environ(), status.GitPath)
 }
 
 func EIMDownloadSources() []string {
@@ -176,6 +193,51 @@ func EIMDownloadSources() []string {
 		"https://dl.espressif.com/github_assets/" + eimAssetPath,
 		"https://github.com/" + eimAssetPath,
 	}
+}
+
+func GitDownloadSources() []string {
+	assetPath := gitWindowsVersion + "/" + gitAssetName
+	return []string{
+		"https://mirrors.huaweicloud.com/git-for-windows/" + assetPath,
+		"https://registry.npmmirror.com/-/binary/git-for-windows/" + assetPath,
+		"https://github.com/git-for-windows/git/releases/download/" + assetPath,
+	}
+}
+
+func withGitStatus(status Status, cacheDir string) Status {
+	if path, ok := findGit(cacheDir); ok {
+		status.GitPath = path
+	}
+	return status
+}
+
+func findGit(cacheDir string) (string, bool) {
+	if path, err := exec.LookPath("git.exe"); err == nil {
+		return path, true
+	}
+	if path, ok := detectCachedGit(cacheDir); ok {
+		return path, true
+	}
+	return "", false
+}
+
+func detectCachedGit(cacheDir string) (string, bool) {
+	if cacheDir == "" {
+		return "", false
+	}
+	for _, root := range runtimeRoots(cacheDir) {
+		for _, candidate := range []string{
+			filepath.Join(root, "tools", "git", "cmd", "git.exe"),
+			filepath.Join(root, "tools", "git", "mingw64", "bin", "git.exe"),
+			filepath.Join(root, "runtime", "tools", "git", "cmd", "git.exe"),
+			filepath.Join(root, "runtime", "tools", "git", "mingw64", "bin", "git.exe"),
+		} {
+			if _, err := os.Stat(candidate); err == nil {
+				return candidate, true
+			}
+		}
+	}
+	return "", false
 }
 
 func detectCachedEIM(cacheDir string) (Status, bool) {
@@ -227,6 +289,109 @@ func eimStatus(eimPath string, configDir string) Status {
 		IDFVersion:  DefaultIDFVersion,
 		Message:     "已准备 ESP-IDF v5.1.4 构建/刷机运行时",
 	}
+}
+
+func ensureGit(ctx context.Context, cacheDir string, progress ProgressFunc, log LogFunc) (string, error) {
+	if path, ok := findGit(cacheDir); ok {
+		if log != nil {
+			log("已检测到 Git 运行时：" + path)
+		}
+		return path, nil
+	}
+
+	toolDir := filepath.Join(cacheDir, "tools")
+	gitDir := filepath.Join(toolDir, "git")
+	gitPath := filepath.Join(gitDir, "cmd", "git.exe")
+	if err := os.MkdirAll(toolDir, 0o755); err != nil {
+		return "", err
+	}
+
+	if log != nil {
+		log("正在准备便携 Git 运行时，用于 ESP-IDF 自动安装和源码构建。")
+	}
+	if progress != nil {
+		progress("准备构建环境", 3, "正在检查 Git 运行时")
+	}
+
+	tmpZip := filepath.Join(toolDir, gitAssetName+".download")
+	tmpDir := filepath.Join(toolDir, "git.download")
+	var lastErr error
+	for index, source := range GitDownloadSources() {
+		sourceName := downloadSourceName(source)
+		if log != nil {
+			log(fmt.Sprintf("正在尝试下载便携 Git %s：%s", gitVersion, sourceName))
+		}
+		if progress != nil {
+			progress("下载构建环境", 4+index*5, fmt.Sprintf("正在连接 %s 下载便携 Git", sourceName))
+		}
+		err := downloadFile(ctx, source, tmpZip, func(downloaded int64, total int64) {
+			if progress == nil {
+				return
+			}
+			if total > 0 {
+				percent := 5 + index*5 + int(float64(downloaded)/float64(total)*14)
+				progress("下载构建环境", percent, fmt.Sprintf("正在从 %s 下载便携 Git：%s / %s", sourceName, formatBytes(downloaded), formatBytes(total)))
+				return
+			}
+			progress("下载构建环境", 8+index*5, fmt.Sprintf("正在从 %s 下载便携 Git：%s", sourceName, formatBytes(downloaded)))
+		})
+		if err != nil {
+			lastErr = err
+			_ = os.Remove(tmpZip)
+			if log != nil {
+				log(fmt.Sprintf("%s 下载便携 Git 失败：%v，准备切换备用源。", sourceName, err))
+			}
+			if progress != nil {
+				progress("下载构建环境", 10+index*5, fmt.Sprintf("%s 下载失败，正在切换备用源", sourceName))
+			}
+			continue
+		}
+
+		_ = os.RemoveAll(tmpDir)
+		if progress != nil {
+			progress("解压构建环境", 25, "正在解压便携 Git")
+		}
+		if err := unzip(tmpZip, tmpDir, func(done int, total int) {
+			if progress == nil || total == 0 {
+				return
+			}
+			progress("解压构建环境", 25+int(float64(done)/float64(total)*8), fmt.Sprintf("正在解压便携 Git：%d / %d", done, total))
+		}); err != nil {
+			lastErr = err
+			_ = os.Remove(tmpZip)
+			_ = os.RemoveAll(tmpDir)
+			if log != nil {
+				log(fmt.Sprintf("便携 Git 解压失败：%v，准备切换备用源。", err))
+			}
+			continue
+		}
+		_ = os.Remove(tmpZip)
+		_ = os.RemoveAll(gitDir)
+		if err := os.Rename(tmpDir, gitDir); err != nil {
+			lastErr = err
+			_ = os.RemoveAll(tmpDir)
+			if log != nil {
+				log(fmt.Sprintf("便携 Git 缓存写入失败：%v，准备切换备用源。", err))
+			}
+			continue
+		}
+		if _, err := os.Stat(gitPath); err != nil {
+			if fallback, ok := detectCachedGit(cacheDir); ok {
+				gitPath = fallback
+			} else {
+				lastErr = fmt.Errorf("便携 Git 解压完成但未找到 git.exe")
+				continue
+			}
+		}
+		if progress != nil {
+			progress("准备构建环境", 34, "便携 Git 已准备好")
+		}
+		if log != nil {
+			log("便携 Git 已准备好：" + gitPath)
+		}
+		return gitPath, nil
+	}
+	return "", fmt.Errorf("便携 Git 下载或解压失败，已尝试华为云镜像、npmmirror 和 GitHub：%w", lastErr)
 }
 
 func ensureEIM(ctx context.Context, cacheDir string, progress ProgressFunc, log LogFunc) (string, error) {
@@ -327,6 +492,62 @@ func downloadFile(ctx context.Context, url string, dest string, progress func(do
 	}
 }
 
+func unzip(zipPath string, destDir string, progress func(done int, total int)) error {
+	reader, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return err
+	}
+	defer reader.Close()
+	destAbs, err := filepath.Abs(destDir)
+	if err != nil {
+		return err
+	}
+	for index, file := range reader.File {
+		target := filepath.Join(destDir, file.Name)
+		targetAbs, err := filepath.Abs(target)
+		if err != nil {
+			return err
+		}
+		if targetAbs != destAbs && !strings.HasPrefix(targetAbs, destAbs+string(os.PathSeparator)) {
+			return fmt.Errorf("zip 内包含非法路径：%s", file.Name)
+		}
+		if file.FileInfo().IsDir() {
+			if err := os.MkdirAll(targetAbs, 0o755); err != nil {
+				return err
+			}
+			if progress != nil {
+				progress(index+1, len(reader.File))
+			}
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
+			return err
+		}
+		src, err := file.Open()
+		if err != nil {
+			return err
+		}
+		dst, err := os.OpenFile(targetAbs, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, file.Mode())
+		if err != nil {
+			_ = src.Close()
+			return err
+		}
+		_, copyErr := io.Copy(dst, src)
+		closeErr := dst.Close()
+		_ = src.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		if progress != nil {
+			progress(index+1, len(reader.File))
+		}
+	}
+	return nil
+}
+
 func runLogged(ctx context.Context, cmd *exec.Cmd, log LogFunc) error {
 	command := processutil.CommandContext(ctx, cmd.Path, cmd.Args[1:]...)
 	command.Env = cmd.Env
@@ -348,10 +569,14 @@ func runLogged(ctx context.Context, cmd *exec.Cmd, log LogFunc) error {
 	var wg sync.WaitGroup
 	pipe := func(scanner *bufio.Scanner) {
 		defer wg.Done()
+		scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 		for scanner.Scan() {
 			if log != nil {
 				log(scanner.Text())
 			}
+		}
+		if err := scanner.Err(); err != nil && log != nil {
+			log("日志读取失败：" + err.Error())
 		}
 	}
 	wg.Add(2)
@@ -379,12 +604,12 @@ func quoteArg(arg string) string {
 	return `"` + strings.ReplaceAll(arg, `"`, `\"`) + `"`
 }
 
-func mirrorEnv(base []string) []string {
-	return upsertEnv(base, map[string]string{
+func mirrorEnv(base []string, toolPaths ...string) []string {
+	return prependPath(upsertEnv(base, map[string]string{
 		"IDF_GITHUB_ASSETS": "dl.espressif.cn/github_assets",
 		"PIP_INDEX_URL":     "https://pypi.tuna.tsinghua.edu.cn/simple",
 		"PIP_TRUSTED_HOST":  "pypi.tuna.tsinghua.edu.cn",
-	})
+	}), gitEnvDirs(toolPaths...)...)
 }
 
 func upsertEnv(base []string, values map[string]string) []string {
@@ -408,12 +633,94 @@ func upsertEnv(base []string, values map[string]string) []string {
 	return out
 }
 
+func prependPath(base []string, dirs ...string) []string {
+	cleanDirs := make([]string, 0, len(dirs))
+	seenDir := map[string]bool{}
+	for _, dir := range dirs {
+		if dir == "" {
+			continue
+		}
+		clean := filepath.Clean(dir)
+		key := strings.ToLower(clean)
+		if seenDir[key] {
+			continue
+		}
+		seenDir[key] = true
+		cleanDirs = append(cleanDirs, clean)
+	}
+	if len(cleanDirs) == 0 {
+		return base
+	}
+
+	out := append([]string{}, base...)
+	prefix := strings.Join(cleanDirs, string(os.PathListSeparator))
+	for i, item := range out {
+		key, value, ok := strings.Cut(item, "=")
+		if ok && strings.EqualFold(key, "PATH") {
+			if value != "" {
+				out[i] = key + "=" + prefix + string(os.PathListSeparator) + value
+			} else {
+				out[i] = key + "=" + prefix
+			}
+			return out
+		}
+	}
+	return append(out, "PATH="+prefix)
+}
+
+func gitEnvDirs(paths ...string) []string {
+	dirs := []string{}
+	for _, path := range paths {
+		if path == "" {
+			continue
+		}
+		gitDir := filepath.Dir(path)
+		dirs = append(dirs, gitDir)
+		root := portableGitRoot(path)
+		if root == "" {
+			continue
+		}
+		for _, candidate := range []string{
+			filepath.Join(root, "cmd"),
+			filepath.Join(root, "mingw64", "bin"),
+			filepath.Join(root, "usr", "bin"),
+		} {
+			if candidate != gitDir {
+				dirs = append(dirs, candidate)
+			}
+		}
+	}
+	return dirs
+}
+
+func portableGitRoot(gitPath string) string {
+	clean := filepath.Clean(gitPath)
+	dir := filepath.Dir(clean)
+	parent := filepath.Base(dir)
+	switch strings.ToLower(parent) {
+	case "cmd":
+		return filepath.Dir(dir)
+	case "bin":
+		up := filepath.Dir(dir)
+		if strings.EqualFold(filepath.Base(up), "mingw64") || strings.EqualFold(filepath.Base(up), "usr") {
+			return filepath.Dir(up)
+		}
+	}
+	return ""
+}
+
 func downloadSourceName(url string) string {
 	switch {
+	case strings.Contains(url, "mirrors.huaweicloud.com"):
+		return "华为云镜像"
+	case strings.Contains(url, "registry.npmmirror.com"):
+		return "npmmirror 镜像"
 	case strings.Contains(url, "dl.espressif.cn"):
 		return "乐鑫国内镜像"
 	case strings.Contains(url, "dl.espressif.com"):
 		return "乐鑫国际镜像"
+	case strings.Contains(url, "git-for-windows"):
+		return "Git for Windows"
 	case strings.Contains(url, "github.com"):
 		return "GitHub"
 	default:

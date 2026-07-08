@@ -18,6 +18,14 @@ export function DownloadAndAnalyzeGithub(arg1) {
   return window['go']['main']['App']['DownloadAndAnalyzeGithub'](arg1);
 }
 
+export function GetLogFilePath() {
+  return window['go']['main']['App']['GetLogFilePath']();
+}
+
+export function GetLogHistory() {
+  return window['go']['main']['App']['GetLogHistory']();
+}
+
 export function OpenFirmwareZip() {
   return window['go']['main']['App']['OpenFirmwareZip']();
 }

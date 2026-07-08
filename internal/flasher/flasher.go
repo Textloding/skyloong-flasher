@@ -53,9 +53,13 @@ func BuildCommand(status runtimekit.Status, analysis *packagekit.Analysis, port 
 	}
 	if status.Kind == runtimekit.KindPythonScript {
 		cmdArgs := append([]string{status.ToolPath}, args...)
-		return processutil.Command(status.PythonPath, cmdArgs...), nil
+		cmd := processutil.Command(status.PythonPath, cmdArgs...)
+		cmd.Env = runtimekit.CommandEnv(status)
+		return cmd, nil
 	}
-	return processutil.Command(status.ToolPath, args...), nil
+	cmd := processutil.Command(status.ToolPath, args...)
+	cmd.Env = runtimekit.CommandEnv(status)
+	return cmd, nil
 }
 
 func Run(ctx context.Context, status runtimekit.Status, analysis *packagekit.Analysis, port string, baud int, log LogFunc) error {
@@ -83,10 +87,14 @@ func Run(ctx context.Context, status runtimekit.Status, analysis *packagekit.Ana
 	var wg sync.WaitGroup
 	pipe := func(scanner *bufio.Scanner) {
 		defer wg.Done()
+		scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 		for scanner.Scan() {
 			if log != nil {
 				log(scanner.Text())
 			}
+		}
+		if err := scanner.Err(); err != nil && log != nil {
+			log("日志读取失败：" + err.Error())
 		}
 	}
 	wg.Add(2)

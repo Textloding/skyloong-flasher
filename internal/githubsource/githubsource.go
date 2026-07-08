@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path"
+	"path/filepath"
 	"strings"
 )
 
@@ -71,12 +71,12 @@ func Download(ctx context.Context, archiveURL string, dest string, progress Prog
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return fmt.Errorf("下载失败：HTTP %d", resp.StatusCode)
 	}
-	if err := os.MkdirAll(path.Dir(filepathSlash(dest)), 0o755); err != nil {
-		return err
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return fmt.Errorf("无法创建下载文件夹：%w", err)
 	}
 	out, err := os.Create(dest)
 	if err != nil {
-		return err
+		return fmt.Errorf("无法创建下载文件：%w", err)
 	}
 	defer out.Close()
 
@@ -152,8 +152,4 @@ func splitPath(p string) []string {
 		}
 	}
 	return out
-}
-
-func filepathSlash(p string) string {
-	return strings.ReplaceAll(p, "\\", "/")
 }

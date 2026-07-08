@@ -31,6 +31,17 @@ func TestBuildCommandWithIDFPy(t *testing.T) {
 	}
 }
 
+func TestBuildCommandWithIDFPyPrefixesPortableGitPath(t *testing.T) {
+	status := runtimekit.Status{CanBuild: true, IDFPyPath: `C:\tools\idf.py`, GitPath: `C:\cache\tools\git\cmd\git.exe`}
+	cmd, err := BuildCommand(status, `C:\work\SKYLOONG`)
+	if err != nil {
+		t.Fatalf("BuildCommand() error = %v", err)
+	}
+	if pathValue := envValue(cmd.Env, "PATH"); !strings.HasPrefix(pathValue, `C:\cache\tools\git\cmd;`) {
+		t.Fatalf("portable Git cmd dir should be first in PATH, got %q", pathValue)
+	}
+}
+
 func TestBuildCommandWithEIMRuntime(t *testing.T) {
 	status := runtimekit.Status{
 		CanBuild:    true,
@@ -56,4 +67,14 @@ func TestBuildCommandRejectsMissingRuntime(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected missing build runtime error")
 	}
+}
+
+func envValue(env []string, key string) string {
+	for _, item := range env {
+		gotKey, value, ok := strings.Cut(item, "=")
+		if ok && strings.EqualFold(gotKey, key) {
+			return value
+		}
+	}
+	return ""
 }
