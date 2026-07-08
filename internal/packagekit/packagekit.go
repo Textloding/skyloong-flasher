@@ -75,7 +75,7 @@ func AnalyzeZip(zipPath string, workspace string) (*Analysis, error) {
 	}
 	analysis, err := AnalyzeDir(extracted)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w; %s", err, unrecognizedPackageSummary(zipPath, extracted))
 	}
 	analysis.SourcePath = zipPath
 	return analysis, nil
@@ -154,6 +154,15 @@ func AnalyzeDir(root string) (*Analysis, error) {
 	flashArgsPath := findFirst(absRoot, "flash_args")
 	if flashArgsPath != "" {
 		return analyzeFlashArgs(analysis, flashArgsPath)
+	}
+
+	if sourceRoot := findIDFSourceRoot(absRoot); sourceRoot != "" {
+		analysis.Root = sourceRoot
+		analysis.ProjectName = filepath.Base(sourceRoot)
+		analysis.Kind = KindSource
+		analysis.NeedsBuild = true
+		analysis.Messages = append(analysis.Messages, "Detected nested ESP-IDF source package; build is required before flashing.")
+		return analysis, nil
 	}
 
 	if isIDFSource(absRoot) {
@@ -280,25 +289,48 @@ func isIDFSource(root string) bool {
 	return true
 }
 
+func findIDFSourceRoot(root string) string {
+	var found string
+	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || found != "" || !d.IsDir() {
+			return nil
+		}
+		if path == root {
+			return nil
+		}
+		switch strings.ToLower(d.Name()) {
+		case ".git", ".github", "__macosx", "build", "managed_components":
+			return filepath.SkipDir
+		}
+		if isIDFSource(path) {
+			found = path
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	return found
+}
+
 func collapseSingleRoot(root string) string {
-	entries, err := os.ReadDir(root)
-	if err != nil || len(entries) != 1 || !entries[0].IsDir() {
-		return root
-	}
-	child := filepath.Join(root, entries[0].Name())
-	childEntries, err := os.ReadDir(child)
-	if err != nil {
-		return child
-	}
-	for _, entry := range childEntries {
-		if err := os.Rename(filepath.Join(child, entry.Name()), filepath.Join(root, entry.Name())); err != nil {
+	for {
+		entries, err := os.ReadDir(root)
+		if err != nil || len(entries) != 1 || !entries[0].IsDir() {
+			return root
+		}
+		child := filepath.Join(root, entries[0].Name())
+		childEntries, err := os.ReadDir(child)
+		if err != nil {
+			return child
+		}
+		for _, entry := range childEntries {
+			if err := os.Rename(filepath.Join(child, entry.Name()), filepath.Join(root, entry.Name())); err != nil {
+				return child
+			}
+		}
+		if err := os.Remove(child); err != nil {
 			return child
 		}
 	}
-	if err := os.Remove(child); err != nil {
-		return child
-	}
-	return root
 }
 
 func shortPackageID() string {
@@ -328,6 +360,72 @@ func createPackageRoot(workspace string, nextID func() string) (string, error) {
 		}
 	}
 	return "", errors.New("无法分配新的短固件工作目录")
+}
+
+func unrecognizedPackageSummary(zipPath string, extractedRoot string) string {
+	parts := []string{}
+	if zipSummary := summarizeZipEntries(zipPath, 16); zipSummary != "" {
+		parts = append(parts, "zip entries: "+zipSummary)
+	}
+	if dirSummary := summarizeDirEntries(extractedRoot, 16); dirSummary != "" {
+		parts = append(parts, "extracted entries: "+dirSummary)
+	}
+	if extractedRoot != "" {
+		parts = append(parts, "extracted root: "+extractedRoot)
+	}
+	return strings.Join(parts, "; ")
+}
+
+func summarizeZipEntries(zipPath string, limit int) string {
+	reader, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return "cannot reopen zip: " + err.Error()
+	}
+	defer reader.Close()
+
+	names := make([]string, 0, limit+1)
+	for _, file := range reader.File {
+		name := strings.TrimRight(file.Name, "/\\")
+		if name == "" {
+			continue
+		}
+		names = append(names, name)
+		if len(names) >= limit {
+			break
+		}
+	}
+	if len(reader.File) > limit {
+		names = append(names, "...")
+	}
+	if len(names) == 0 {
+		return "empty zip"
+	}
+	return strings.Join(names, ", ")
+}
+
+func summarizeDirEntries(root string, limit int) string {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return "cannot read extracted root: " + err.Error()
+	}
+	names := make([]string, 0, limit+1)
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() {
+			name += "/"
+		}
+		names = append(names, name)
+		if len(names) >= limit {
+			break
+		}
+	}
+	if len(entries) > limit {
+		names = append(names, "...")
+	}
+	if len(names) == 0 {
+		return "empty extracted root"
+	}
+	return strings.Join(names, ", ")
 }
 
 func isInside(root string, target string) bool {

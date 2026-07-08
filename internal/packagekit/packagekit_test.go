@@ -80,6 +80,46 @@ func TestAnalyzeZipWithSourceOnlyProject(t *testing.T) {
 	}
 }
 
+func TestAnalyzeZipFindsNestedSourceProject(t *testing.T) {
+	workspace := t.TempDir()
+	zipPath := makeZip(t, map[string]string{
+		"archive/SKYLOONG-main/CMakeLists.txt": "idf_component_register()",
+		"archive/SKYLOONG-main/main/main.cpp":  "void app_main(){}",
+		"archive/SKYLOONG-main/sdkconfig":      "CONFIG_IDF_TARGET=\"esp32s3\"",
+	})
+
+	analysis, err := AnalyzeZip(zipPath, workspace)
+	if err != nil {
+		t.Fatalf("AnalyzeZip() error = %v", err)
+	}
+	if analysis.Kind != KindSource {
+		t.Fatalf("kind = %q", analysis.Kind)
+	}
+	if !analysis.NeedsBuild {
+		t.Fatalf("nested source project should need build")
+	}
+	if filepath.Base(analysis.Root) == "SKYLOONG-main" {
+		t.Fatalf("nested single zip roots should be flattened to keep build paths short, got %q", analysis.Root)
+	}
+	if !strings.HasPrefix(analysis.Root, workspace) {
+		t.Fatalf("analysis root %q should stay under workspace %q", analysis.Root, workspace)
+	}
+}
+
+func TestAnalyzeZipUnrecognizedPackageIncludesZipSummary(t *testing.T) {
+	zipPath := makeZip(t, map[string]string{
+		"not-firmware/README.md": "hello",
+	})
+
+	_, err := AnalyzeZip(zipPath, t.TempDir())
+	if err == nil {
+		t.Fatalf("expected unrecognized package error")
+	}
+	if !strings.Contains(err.Error(), "README.md") {
+		t.Fatalf("error should include zip content summary, got: %v", err)
+	}
+}
+
 func TestCreatePackageRootSkipsExistingShortDirectory(t *testing.T) {
 	workspace := t.TempDir()
 	if err := os.Mkdir(filepath.Join(workspace, "pabc"), 0o755); err != nil {
