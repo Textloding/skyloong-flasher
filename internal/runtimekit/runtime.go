@@ -31,18 +31,19 @@ const (
 )
 
 type Status struct {
-	Available    bool   `json:"available"`
-	CanBuild     bool   `json:"canBuild"`
-	Kind         string `json:"kind"`
-	ToolPath     string `json:"toolPath"`
-	PythonPath   string `json:"pythonPath"`
-	IDFPyPath    string `json:"idfPyPath"`
-	ExportScript string `json:"exportScript"`
-	EIMPath      string `json:"eimPath"`
-	EIMJsonPath  string `json:"eimJsonPath"`
-	IDFVersion   string `json:"idfVersion"`
-	GitPath      string `json:"gitPath"`
-	Message      string `json:"message"`
+	Available          bool   `json:"available"`
+	CanBuild           bool   `json:"canBuild"`
+	Kind               string `json:"kind"`
+	ToolPath           string `json:"toolPath"`
+	PythonPath         string `json:"pythonPath"`
+	IDFPyPath          string `json:"idfPyPath"`
+	ExportScript       string `json:"exportScript"`
+	EIMPath            string `json:"eimPath"`
+	EIMJsonPath        string `json:"eimJsonPath"`
+	IDFVersion         string `json:"idfVersion"`
+	GitPath            string `json:"gitPath"`
+	ComponentCachePath string `json:"componentCachePath"`
+	Message            string `json:"message"`
 }
 
 type ProgressFunc func(stage string, percent int, message string)
@@ -84,12 +85,12 @@ func Detect() Status {
 func DetectIn(cacheDir string) Status {
 	status := Detect()
 	if status.CanBuild && status.Available {
-		return withGitStatus(status, cacheDir)
+		return withRuntimePaths(status, cacheDir)
 	}
 	if cached, ok := detectCachedEIM(cacheDir); ok {
-		return withGitStatus(cached, cacheDir)
+		return withRuntimePaths(cached, cacheDir)
 	}
-	return withGitStatus(status, cacheDir)
+	return withRuntimePaths(status, cacheDir)
 }
 
 func Ensure(ctx context.Context, cacheDir string, progress ProgressFunc, log LogFunc) (Status, error) {
@@ -98,6 +99,11 @@ func Ensure(ctx context.Context, cacheDir string, progress ProgressFunc, log Log
 	}
 
 	status := DetectIn(cacheDir)
+	if status.ComponentCachePath != "" {
+		if err := os.MkdirAll(status.ComponentCachePath, 0o755); err != nil {
+			return Status{}, fmt.Errorf("ESP-IDF 组件缓存目录准备失败：%w", err)
+		}
+	}
 	gitPath, err := ensureGit(ctx, cacheDir, progress, log)
 	if err != nil {
 		return Status{}, err
@@ -145,8 +151,10 @@ func Ensure(ctx context.Context, cacheDir string, progress ProgressFunc, log Log
 	if progress != nil {
 		progress("安装 ESP-IDF", 100, "ESP-IDF 构建环境已准备好")
 	}
+	componentCache := status.ComponentCachePath
 	status = eimStatus(eimPath, configDir)
 	status.GitPath = gitPath
+	status.ComponentCachePath = componentCache
 	return status, nil
 }
 
@@ -179,12 +187,12 @@ func EIMRunCommand(status Status, args ...string) *exec.Cmd {
 		cmdArgs = append(cmdArgs, status.IDFVersion)
 	}
 	cmd := processutil.Command(status.EIMPath, cmdArgs...)
-	cmd.Env = mirrorEnv(os.Environ(), status.GitPath)
+	cmd.Env = runtimeEnv(os.Environ(), status.ComponentCachePath, status.GitPath)
 	return cmd
 }
 
 func CommandEnv(status Status) []string {
-	return mirrorEnv(os.Environ(), status.GitPath)
+	return runtimeEnv(os.Environ(), status.ComponentCachePath, status.GitPath)
 }
 
 func EIMDownloadSources() []string {
@@ -204,11 +212,19 @@ func GitDownloadSources() []string {
 	}
 }
 
-func withGitStatus(status Status, cacheDir string) Status {
+func withRuntimePaths(status Status, cacheDir string) Status {
 	if path, ok := findGit(cacheDir); ok {
 		status.GitPath = path
 	}
+	status.ComponentCachePath = componentCachePath(cacheDir)
 	return status
+}
+
+func componentCachePath(cacheDir string) string {
+	if cacheDir == "" {
+		return ""
+	}
+	return filepath.Join(cacheDir, "cm")
 }
 
 func findGit(cacheDir string) (string, bool) {
@@ -605,11 +621,20 @@ func quoteArg(arg string) string {
 }
 
 func mirrorEnv(base []string, toolPaths ...string) []string {
-	return prependPath(upsertEnv(base, map[string]string{
-		"IDF_GITHUB_ASSETS": "dl.espressif.cn/github_assets",
-		"PIP_INDEX_URL":     "https://pypi.tuna.tsinghua.edu.cn/simple",
-		"PIP_TRUSTED_HOST":  "pypi.tuna.tsinghua.edu.cn",
-	}), gitEnvDirs(toolPaths...)...)
+	return runtimeEnv(base, "", toolPaths...)
+}
+
+func runtimeEnv(base []string, componentCachePath string, toolPaths ...string) []string {
+	values := map[string]string{
+		"IDF_GITHUB_ASSETS":         "dl.espressif.cn/github_assets",
+		"IDF_COMPONENT_STORAGE_URL": "https://components-file.espressif.cn;https://components-file.espressif.com",
+		"PIP_INDEX_URL":             "https://pypi.tuna.tsinghua.edu.cn/simple",
+		"PIP_TRUSTED_HOST":          "pypi.tuna.tsinghua.edu.cn",
+	}
+	if componentCachePath != "" {
+		values["IDF_COMPONENT_CACHE_PATH"] = componentCachePath
+	}
+	return prependPath(upsertEnv(base, values), gitEnvDirs(toolPaths...)...)
 }
 
 func upsertEnv(base []string, values map[string]string) []string {

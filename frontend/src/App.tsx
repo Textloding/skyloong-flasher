@@ -442,8 +442,11 @@ function userFacingError(err: unknown) {
   if (raw.includes("ESP-IDF 自动安装失败")) {
     return "ESP-IDF 构建环境自动准备失败。请先重试一次；如果网络较慢，等待界面进度继续变化，不需要打开命令行。详细原因在高级日志里。";
   }
+  if (raw.includes("组件缓存路径过长") || raw.includes("ComponentManager") || raw.includes("FileNotFoundError")) {
+    return "ESP-IDF 组件缓存路径过深或缓存不完整。工具已改用更短的组件缓存目录，请直接重新点击“准备环境并构建”。";
+  }
   if (raw.includes("源码构建失败")) {
-    return "源码构建失败。请确认选择的是支持 ESP-IDF v5.1.4 的固件源码包；详细构建日志在高级日志里。";
+    return "源码构建失败。请查看高级日志里最早出现的 CMake/idf.py 错误；工具会保留完整日志，必要时可复制出来排查。";
   }
   return raw || "任务失败，请查看高级日志。";
 }

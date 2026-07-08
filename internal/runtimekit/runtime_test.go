@@ -65,6 +65,7 @@ func TestEIMInstallCommandUsesEspressifMirrorEnvironment(t *testing.T) {
 
 	for _, want := range []string{
 		"IDF_GITHUB_ASSETS=dl.espressif.cn/github_assets",
+		"IDF_COMPONENT_STORAGE_URL=https://components-file.espressif.cn;https://components-file.espressif.com",
 		"PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple",
 		"PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn",
 	} {
@@ -96,11 +97,12 @@ func TestEIMInstallCommandPrefixesPortableGitPath(t *testing.T) {
 
 func TestEIMRunCommandWrapsCommandAndVersion(t *testing.T) {
 	status := Status{
-		Kind:        KindEIM,
-		EIMPath:     `C:\tools\eim.exe`,
-		EIMJsonPath: `C:\cache\eim`,
-		IDFVersion:  "v5.1.4",
-		GitPath:     `C:\cache\tools\git\cmd\git.exe`,
+		Kind:               KindEIM,
+		EIMPath:            `C:\tools\eim.exe`,
+		EIMJsonPath:        `C:\cache\eim`,
+		IDFVersion:         "v5.1.4",
+		GitPath:            `C:\cache\tools\git\cmd\git.exe`,
+		ComponentCachePath: `C:\cache\cm`,
 	}
 
 	cmd := EIMRunCommand(status, "idf.py", "build")
@@ -119,6 +121,18 @@ func TestEIMRunCommandWrapsCommandAndVersion(t *testing.T) {
 	}
 	if pathValue := envValue(cmd.Env, "PATH"); !strings.HasPrefix(pathValue, `C:\cache\tools\git\cmd;`) {
 		t.Fatalf("portable Git cmd dir should be first in PATH, got %q", pathValue)
+	}
+	if got := envValue(cmd.Env, "IDF_COMPONENT_CACHE_PATH"); got != `C:\cache\cm` {
+		t.Fatalf("IDF_COMPONENT_CACHE_PATH = %q", got)
+	}
+}
+
+func TestDetectInSetsComponentCachePath(t *testing.T) {
+	root := t.TempDir()
+	status := DetectIn(root)
+	want := filepath.Join(root, "cm")
+	if status.ComponentCachePath != want {
+		t.Fatalf("ComponentCachePath = %q, want %q", status.ComponentCachePath, want)
 	}
 }
 

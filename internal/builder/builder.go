@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"os/exec"
 	"strings"
 	"sync"
@@ -61,12 +62,15 @@ func Run(ctx context.Context, status runtimekit.Status, sourceRoot string, log L
 		return err
 	}
 	var wg sync.WaitGroup
+	state := newBuildLogState()
 	pipe := func(scanner *bufio.Scanner) {
 		defer wg.Done()
 		scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 		for scanner.Scan() {
+			line := scanner.Text()
+			state.Observe(line)
 			if log != nil {
-				log(scanner.Text())
+				log(line)
 			}
 		}
 		if err := scanner.Err(); err != nil && log != nil {
@@ -77,5 +81,68 @@ func Run(ctx context.Context, status runtimekit.Status, sourceRoot string, log L
 	go pipe(bufio.NewScanner(stdout))
 	go pipe(bufio.NewScanner(stderr))
 	wg.Wait()
-	return command.Wait()
+	return state.Err(command.Wait())
+}
+
+type buildLogState struct {
+	mu                    sync.Mutex
+	failed                bool
+	reason                string
+	sawFileNotFound       bool
+	sawComponentCachePath bool
+}
+
+func newBuildLogState() *buildLogState {
+	return &buildLogState{}
+}
+
+func (s *buildLogState) Observe(line string) {
+	lower := strings.ToLower(line)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if strings.Contains(lower, "filenotfounderror") || strings.Contains(lower, "no such file or directory") {
+		s.sawFileNotFound = true
+	}
+	if strings.Contains(lower, "componentmanager") && strings.Contains(lower, "cache") {
+		s.sawComponentCachePath = true
+	}
+	if s.sawFileNotFound && s.sawComponentCachePath {
+		s.failed = true
+		s.reason = "ESP-IDF 组件缓存路径过长或缓存文件损坏，工具已改为使用更短的组件缓存目录，请重新构建一次"
+		return
+	}
+
+	switch {
+	case strings.Contains(lower, "cmake failed with exit code"),
+		strings.Contains(lower, "ninja failed with exit code"),
+		strings.Contains(lower, "idf.py failed"),
+		strings.Contains(lower, "command failed"):
+		s.failed = true
+		s.reason = line
+	case strings.Contains(lower, "cmake error at") && s.reason == "":
+		s.failed = true
+		s.reason = line
+	case strings.Contains(lower, "traceback") && s.reason == "":
+		s.failed = true
+		s.reason = line
+	}
+}
+
+func (s *buildLogState) Err(processErr error) error {
+	s.mu.Lock()
+	failed := s.failed
+	reason := s.reason
+	s.mu.Unlock()
+
+	if reason == "" {
+		reason = "请查看高级日志中的 CMake/idf.py 输出"
+	}
+	if processErr != nil {
+		return fmt.Errorf("ESP-IDF 构建失败：%s：%w", reason, processErr)
+	}
+	if failed {
+		return errors.New("ESP-IDF 构建失败：" + reason)
+	}
+	return nil
 }

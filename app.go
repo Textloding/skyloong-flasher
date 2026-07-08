@@ -262,6 +262,7 @@ func (a *App) prepareCacheDirs() error {
 		filepath.Join(a.cacheDir, "packages"),
 		filepath.Join(a.cacheDir, "runtime"),
 		filepath.Join(a.cacheDir, "tools"),
+		filepath.Join(a.cacheDir, "cm"),
 		filepath.Join(a.cacheDir, "logs"),
 	} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {

@@ -52,6 +52,9 @@ func TestPrepareCacheDirsCreatesExpectedFolders(t *testing.T) {
 			t.Fatalf("expected %s directory to exist, info=%v err=%v", dir, info, err)
 		}
 	}
+	if info, err := os.Stat(filepath.Join(app.cacheDir, "cm")); err != nil || !info.IsDir() {
+		t.Fatalf("expected component cache directory to exist, info=%v err=%v", info, err)
+	}
 }
 
 func formatTestNumber(n int) string {

@@ -69,6 +69,8 @@ https://github.com/Textloding/SKYLOONG/archive/refs/heads/main.zip
 
 首次自动准备环境会下载较多文件，耗时取决于网络。工具会先准备便携 Git，然后通过 EIM CLI 安装 ESP-IDF v5.1.4。Git 会优先使用华为云镜像，其次 npmmirror，最后才尝试 GitHub；EIM CLI 和 ESP-IDF 资源会优先使用乐鑫国内镜像 `dl.espressif.cn`，失败后自动切换备用源。准备完成后会缓存在本机，后续构建会直接复用。
 
+源码组件下载会优先使用 `https://components-file.espressif.cn`，再回退到 `https://components-file.espressif.com`。
+
 网络较差的用户，后续可以下载离线完整版压缩包。离线包建议把以下目录放在 exe 同级，工具启动后会优先识别这些内置运行时：
 
 ```text
@@ -90,6 +92,7 @@ runtime/
 %LOCALAPPDATA%\SkyloongFlasher\packages
 %LOCALAPPDATA%\SkyloongFlasher\runtime
 %LOCALAPPDATA%\SkyloongFlasher\tools
+%LOCALAPPDATA%\SkyloongFlasher\cm
 %LOCALAPPDATA%\SkyloongFlasher\logs
 ```
 
@@ -157,6 +160,12 @@ wails build
 ### 提示缺少 Git 怎么办？
 
 新版会自动下载便携 Git，不要求用户安装系统 Git。如果高级日志中仍出现 `Git was not found` 或 `git not found`，请确认正在使用新版 exe，并重新点击“准备环境并构建”。离线完整版需要包含 `runtime/tools/git/cmd/git.exe`。
+
+### 提示组件缓存路径过长或 FileNotFoundError 怎么办？
+
+Windows 下 ESP-IDF 组件有些测试文件路径非常深，默认组件缓存目录可能触发路径过长。新版会把 `IDF_COMPONENT_CACHE_PATH` 指向工具自己的短目录 `%LOCALAPPDATA%\SkyloongFlasher\cm`。如果旧版本已经失败过，直接用新版重新点击“准备环境并构建”即可。
+
+如果仍然失败，复制完整高级日志，优先查看最早出现的 `CMake Error`、`FileNotFoundError` 或 `cmake failed with exit code`。
 
 ## 发布建议
 
