@@ -80,6 +80,30 @@ func TestAnalyzeZipWithSourceOnlyProject(t *testing.T) {
 	}
 }
 
+func TestCreatePackageRootSkipsExistingShortDirectory(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.Mkdir(filepath.Join(workspace, "pabc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ids := []string{"pabc", "pdef"}
+	nextID := func() string {
+		id := ids[0]
+		ids = ids[1:]
+		return id
+	}
+
+	root, err := createPackageRoot(workspace, nextID)
+	if err != nil {
+		t.Fatalf("createPackageRoot() error = %v", err)
+	}
+	if filepath.Base(root) != "pdef" {
+		t.Fatalf("root = %q, want pdef after collision", root)
+	}
+	if _, err := os.Stat(root); err != nil {
+		t.Fatalf("new package root should exist: %v", err)
+	}
+}
+
 func TestAnalyzeZipRejectsPathTraversal(t *testing.T) {
 	zipPath := makeZip(t, map[string]string{
 		"../evil.txt": "owned",

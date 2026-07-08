@@ -2,6 +2,8 @@ package packagekit
 
 import (
 	"archive/zip"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -63,8 +65,8 @@ func AnalyzeZip(zipPath string, workspace string) (*Analysis, error) {
 	if workspace == "" {
 		workspace = os.TempDir()
 	}
-	root := filepath.Join(workspace, shortPackageID())
-	if err := os.MkdirAll(root, 0o755); err != nil {
+	root, err := createPackageRoot(workspace, shortPackageID)
+	if err != nil {
 		return nil, fmt.Errorf("无法创建固件解压文件夹：%w", err)
 	}
 	extracted, err := ExtractZip(zipPath, root)
@@ -300,7 +302,32 @@ func collapseSingleRoot(root string) string {
 }
 
 func shortPackageID() string {
+	var bytes [4]byte
+	if _, err := rand.Read(bytes[:]); err == nil {
+		return "p" + hex.EncodeToString(bytes[:])
+	}
 	return "p" + strconv.FormatInt(time.Now().UnixNano()%2176782336, 36)
+}
+
+func createPackageRoot(workspace string, nextID func() string) (string, error) {
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		return "", err
+	}
+	for attempt := 0; attempt < 64; attempt++ {
+		id := strings.TrimSpace(nextID())
+		if id == "" {
+			continue
+		}
+		root := filepath.Join(workspace, id)
+		if err := os.Mkdir(root, 0o755); err == nil {
+			return root, nil
+		} else if os.IsExist(err) {
+			continue
+		} else {
+			return "", err
+		}
+	}
+	return "", errors.New("无法分配新的短固件工作目录")
 }
 
 func isInside(root string, target string) bool {
