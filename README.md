@@ -92,11 +92,11 @@ runtime/
 %LOCALAPPDATA%\SkyloongFlasher\packages
 %LOCALAPPDATA%\SkyloongFlasher\runtime
 %LOCALAPPDATA%\SkyloongFlasher\tools
-%LOCALAPPDATA%\SkyloongFlasher\cm
 %LOCALAPPDATA%\SkyloongFlasher\logs
+C:\SLCM
 ```
 
-如果用户目录权限异常，工具会尝试退回到系统临时目录，并在高级日志里记录实际使用的缓存目录。
+其中 `C:\SLCM` 用于 ESP-IDF 组件缓存，目录名故意很短，用来避开 Windows 路径长度限制。如果根目录不可写，工具会自动尝试 `ProgramData`、系统临时目录，最后才退回 `%LOCALAPPDATA%\SkyloongFlasher\cm`，并在高级日志里记录实际使用的组件缓存目录。
 
 ## 设备识别说明
 
@@ -163,7 +163,9 @@ wails build
 
 ### 提示组件缓存路径过长或 FileNotFoundError 怎么办？
 
-Windows 下 ESP-IDF 组件有些测试文件路径非常深，默认组件缓存目录可能触发路径过长。新版会把 `IDF_COMPONENT_CACHE_PATH` 指向工具自己的短目录 `%LOCALAPPDATA%\SkyloongFlasher\cm`。如果旧版本已经失败过，直接用新版重新点击“准备环境并构建”即可。
+Windows 下 ESP-IDF 组件有些测试文件路径非常深，默认组件缓存目录可能触发路径过长。新版会把 `IDF_COMPONENT_CACHE_PATH` 优先指向 `C:\SLCM`，如果该目录不可写，会自动尝试 `ProgramData`、系统临时目录和工具本地缓存目录。高级日志里会出现“ESP-IDF 组件缓存目录：...”用于确认实际路径。
+
+如果旧版本已经失败过，直接用新版重新点击“准备环境并构建”即可。特殊环境下也可以在启动前设置 `SKYLOONG_COMPONENT_CACHE_PATH` 指向一个更短且可写的目录，例如 `D:\SLCM`。
 
 如果仍然失败，复制完整高级日志，优先查看最早出现的 `CMake Error`、`FileNotFoundError` 或 `cmake failed with exit code`。
 

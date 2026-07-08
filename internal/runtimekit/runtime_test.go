@@ -128,11 +128,25 @@ func TestEIMRunCommandWrapsCommandAndVersion(t *testing.T) {
 }
 
 func TestDetectInSetsComponentCachePath(t *testing.T) {
-	root := t.TempDir()
+	t.Setenv("SKYLOONG_COMPONENT_CACHE_PATH", "")
+	root := `C:\Users\Administrator\AppData\Local\SkyloongFlasher`
 	status := DetectIn(root)
-	want := filepath.Join(root, "cm")
+	want := filepath.Join(`C:\`, "SLCM")
 	if status.ComponentCachePath != want {
 		t.Fatalf("ComponentCachePath = %q, want %q", status.ComponentCachePath, want)
+	}
+	if strings.Contains(strings.ToLower(status.ComponentCachePath), strings.ToLower(root)) {
+		t.Fatalf("component cache path should not stay under long cache dir: %q", status.ComponentCachePath)
+	}
+}
+
+func TestComponentCachePathRespectsOverride(t *testing.T) {
+	override := filepath.Join(t.TempDir(), "idf-components")
+	t.Setenv("SKYLOONG_COMPONENT_CACHE_PATH", override)
+
+	status := DetectIn(`C:\Users\Administrator\AppData\Local\SkyloongFlasher`)
+	if status.ComponentCachePath != override {
+		t.Fatalf("ComponentCachePath = %q, want override %q", status.ComponentCachePath, override)
 	}
 }
 

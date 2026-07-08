@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Textloding/skyloong-flasher/internal/runtimekit"
 )
 
 func TestLogHistoryKeepsFirstAndLastLine(t *testing.T) {
@@ -42,6 +44,8 @@ func TestLogHistoryKeepsFirstAndLastLine(t *testing.T) {
 func TestPrepareCacheDirsCreatesExpectedFolders(t *testing.T) {
 	app := NewApp()
 	app.cacheDir = t.TempDir()
+	componentCache := filepath.Join(t.TempDir(), "idf-components")
+	t.Setenv("SKYLOONG_COMPONENT_CACHE_PATH", componentCache)
 
 	if err := app.prepareCacheDirs(); err != nil {
 		t.Fatalf("prepareCacheDirs() error = %v", err)
@@ -52,7 +56,7 @@ func TestPrepareCacheDirsCreatesExpectedFolders(t *testing.T) {
 			t.Fatalf("expected %s directory to exist, info=%v err=%v", dir, info, err)
 		}
 	}
-	if info, err := os.Stat(filepath.Join(app.cacheDir, "cm")); err != nil || !info.IsDir() {
+	if info, err := os.Stat(runtimekit.ComponentCachePath(app.cacheDir)); err != nil || !info.IsDir() {
 		t.Fatalf("expected component cache directory to exist, info=%v err=%v", info, err)
 	}
 }

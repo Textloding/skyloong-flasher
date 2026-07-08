@@ -262,12 +262,14 @@ func (a *App) prepareCacheDirs() error {
 		filepath.Join(a.cacheDir, "packages"),
 		filepath.Join(a.cacheDir, "runtime"),
 		filepath.Join(a.cacheDir, "tools"),
-		filepath.Join(a.cacheDir, "cm"),
 		filepath.Join(a.cacheDir, "logs"),
 	} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("无法创建文件夹 %s：%w", dir, err)
 		}
+	}
+	if _, err := runtimekit.PrepareComponentCacheDir(a.cacheDir); err != nil {
+		return fmt.Errorf("无法创建 ESP-IDF 组件缓存目录：%w", err)
 	}
 	return nil
 }

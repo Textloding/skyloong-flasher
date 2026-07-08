@@ -28,6 +28,9 @@ const (
 	gitVersion        = "2.53.0"
 	gitWindowsVersion = "v2.53.0.windows.1"
 	gitAssetName      = "MinGit-2.53.0-64-bit.zip"
+
+	componentCacheOverrideEnv = "SKYLOONG_COMPONENT_CACHE_PATH"
+	componentCacheDirName     = "SLCM"
 )
 
 type Status struct {
@@ -99,10 +102,13 @@ func Ensure(ctx context.Context, cacheDir string, progress ProgressFunc, log Log
 	}
 
 	status := DetectIn(cacheDir)
-	if status.ComponentCachePath != "" {
-		if err := os.MkdirAll(status.ComponentCachePath, 0o755); err != nil {
-			return Status{}, fmt.Errorf("ESP-IDF 组件缓存目录准备失败：%w", err)
-		}
+	componentCache, err := PrepareComponentCacheDir(cacheDir)
+	if err != nil {
+		return Status{}, fmt.Errorf("ESP-IDF 组件缓存目录准备失败：%w", err)
+	}
+	status.ComponentCachePath = componentCache
+	if log != nil && componentCache != "" {
+		log("ESP-IDF 组件缓存目录：" + componentCache)
 	}
 	gitPath, err := ensureGit(ctx, cacheDir, progress, log)
 	if err != nil {
@@ -151,7 +157,6 @@ func Ensure(ctx context.Context, cacheDir string, progress ProgressFunc, log Log
 	if progress != nil {
 		progress("安装 ESP-IDF", 100, "ESP-IDF 构建环境已准备好")
 	}
-	componentCache := status.ComponentCachePath
 	status = eimStatus(eimPath, configDir)
 	status.GitPath = gitPath
 	status.ComponentCachePath = componentCache
@@ -220,11 +225,83 @@ func withRuntimePaths(status Status, cacheDir string) Status {
 	return status
 }
 
+func ComponentCachePath(cacheDir string) string {
+	return componentCachePath(cacheDir)
+}
+
+func PrepareComponentCacheDir(cacheDir string) (string, error) {
+	var lastErr error
+	for _, dir := range componentCachePathCandidates(cacheDir) {
+		if dir == "" {
+			continue
+		}
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			lastErr = fmt.Errorf("%s: %w", dir, err)
+			continue
+		}
+		return dir, nil
+	}
+	if lastErr != nil {
+		return "", lastErr
+	}
+	return "", errors.New("没有可用的 ESP-IDF 组件缓存目录")
+}
+
 func componentCachePath(cacheDir string) string {
+	candidates := componentCachePathCandidates(cacheDir)
+	if len(candidates) == 0 {
+		return ""
+	}
+	return candidates[0]
+}
+
+func componentCachePathCandidates(cacheDir string) []string {
+	paths := []string{}
+	if override := strings.TrimSpace(os.Getenv(componentCacheOverrideEnv)); override != "" {
+		paths = appendUniquePath(paths, override)
+	}
+	if shortRoot := shortRootComponentCachePath(cacheDir); shortRoot != "" {
+		paths = appendUniquePath(paths, shortRoot)
+	}
+	if programData := strings.TrimSpace(os.Getenv("PROGRAMDATA")); programData != "" {
+		paths = appendUniquePath(paths, filepath.Join(programData, componentCacheDirName))
+	}
+	if tempDir := strings.TrimSpace(os.TempDir()); tempDir != "" {
+		paths = appendUniquePath(paths, filepath.Join(tempDir, componentCacheDirName))
+	}
+	if cacheDir != "" {
+		paths = appendUniquePath(paths, filepath.Join(cacheDir, "cm"))
+	}
+	return paths
+}
+
+func shortRootComponentCachePath(cacheDir string) string {
 	if cacheDir == "" {
 		return ""
 	}
-	return filepath.Join(cacheDir, "cm")
+	volume := filepath.VolumeName(cacheDir)
+	if volume == "" {
+		if abs, err := filepath.Abs(cacheDir); err == nil {
+			volume = filepath.VolumeName(abs)
+		}
+	}
+	if volume == "" {
+		return ""
+	}
+	return filepath.Join(volume+string(os.PathSeparator), componentCacheDirName)
+}
+
+func appendUniquePath(paths []string, path string) []string {
+	if strings.TrimSpace(path) == "" {
+		return paths
+	}
+	clean := filepath.Clean(path)
+	for _, existing := range paths {
+		if strings.EqualFold(existing, clean) {
+			return paths
+		}
+	}
+	return append(paths, clean)
 }
 
 func findGit(cacheDir string) (string, bool) {
