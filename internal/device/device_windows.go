@@ -3,7 +3,9 @@
 package device
 
 import (
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"github.com/Textloding/skyloong-flasher/internal/processutil"
@@ -55,12 +57,32 @@ func readSerialRows() ([]serialRow, error) {
 }
 
 func runJSON(script string, out interface{}) error {
-	cmd := processutil.Command("powershell", "-NoProfile", "-Command", script)
+	cmd := processutil.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", wrapJSONScript(script))
 	raw, err := cmd.Output()
 	if err != nil {
 		return err
 	}
-	text := strings.TrimSpace(string(raw))
+	return decodeJSONPayload(raw, out)
+}
+
+func wrapJSONScript(script string) string {
+	return fmt.Sprintf(`$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false); $OutputEncoding=[Console]::OutputEncoding; $json = & { %s }; if ($null -eq $json) { $json = '' }; [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes([string]$json))`, script)
+}
+
+func decodeJSONPayload(raw []byte, out interface{}) error {
+	encoded := strings.TrimSpace(string(raw))
+	if encoded == "" {
+		return nil
+	}
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return decodeJSONText(encoded, out)
+	}
+	return decodeJSONText(string(decoded), out)
+}
+
+func decodeJSONText(text string, out interface{}) error {
+	text = strings.TrimSpace(strings.TrimPrefix(text, "\ufeff"))
 	if text == "" {
 		return nil
 	}
