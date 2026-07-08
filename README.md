@@ -94,9 +94,10 @@ runtime/
 %LOCALAPPDATA%\SkyloongFlasher\tools
 %LOCALAPPDATA%\SkyloongFlasher\logs
 C:\SLCM
+C:\P
 ```
 
-其中 `C:\SLCM` 用于 ESP-IDF 组件缓存，目录名故意很短，用来避开 Windows 路径长度限制。如果根目录不可写，工具会自动尝试 `ProgramData`、系统临时目录，最后才退回 `%LOCALAPPDATA%\SkyloongFlasher\cm`，并在高级日志里记录实际使用的组件缓存目录。部分 ESP-IDF 组件包会把不参与固件构建的测试 build 产物也打进包内，工具会在 Python 文件写入阶段启用 Windows 长路径前缀，确保组件包完整解压并通过校验。
+其中 `C:\SLCM` 用于 ESP-IDF 组件缓存，`C:\P` 用于源码包解压和构建工作区，目录名故意很短，用来避开 Windows 路径长度限制。如果根目录不可写，工具会自动尝试备用目录，并在高级日志里记录实际使用的目录。部分 ESP-IDF 组件包会把不参与固件构建的测试 build 产物也打进包内，工具会在 Python 文件写入阶段启用 Windows 长路径前缀，确保组件包完整解压并通过校验。
 
 ## 设备识别说明
 
@@ -166,6 +167,8 @@ wails build
 Windows 下 ESP-IDF 组件有些测试文件路径非常深，默认组件缓存目录可能触发路径过长。新版会把 `IDF_COMPONENT_CACHE_PATH` 优先指向 `C:\SLCM`，如果该目录不可写，会自动尝试 `ProgramData`、系统临时目录和工具本地缓存目录。高级日志里会出现“ESP-IDF 组件缓存目录：...”用于确认实际路径。
 
 如果遇到 `espressif/esp-serial-flasher` 这类组件包内自带的 `test/target-example-src/**/build-*` 超长路径，工具会通过内置 Python 补丁给 `open`、`io.open`、`os.makedirs`、`os.stat` 等文件操作加上 Windows 长路径前缀。旧版本如果留下过缺文件的损坏缓存，新版会按 `CHECKSUMS.json` 检测并删除该组件缓存，让 ESP-IDF 重新完整下载和解压。
+
+新版还会把源码包解压到 `C:\P\<短ID>`，并自动扁平化 zip 里常见的单根目录，例如 `SKYLOONG-main`。这样 ESP-IDF 把组件复制到项目 `managed_components` 时，目标路径也不会因为 `%LOCALAPPDATA%` 太长而失败。特殊环境下可设置 `SKYLOONG_PACKAGE_WORKSPACE_PATH` 指向一个更短且可写的目录。
 
 如果旧版本已经失败过，直接用新版重新点击“准备环境并构建”即可。特殊环境下也可以在启动前设置 `SKYLOONG_COMPONENT_CACHE_PATH` 指向一个更短且可写的目录，例如 `D:\SLCM`。
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,6 +17,8 @@ import (
 	"github.com/Textloding/skyloong-flasher/internal/runtimekit"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
+
+const packageWorkspaceOverrideEnv = "SKYLOONG_PACKAGE_WORKSPACE_PATH"
 
 type App struct {
 	ctx        context.Context
@@ -79,7 +82,12 @@ func (a *App) AnalyzeLocalZip(path string) (*AnalyzeResponse, error) {
 	}
 	a.logLine("开始解析本地固件包：" + path)
 	a.progress("解析固件包", 8, "正在读取 zip 文件")
-	analysis, err := packagekit.AnalyzeZip(path, filepath.Join(a.cacheDir, "packages"))
+	workspace, err := a.preparePackageWorkspace()
+	if err != nil {
+		return nil, friendlyError("固件工作目录准备失败", err)
+	}
+	a.logLine("固件工作目录：" + workspace)
+	analysis, err := packagekit.AnalyzeZip(path, workspace)
 	if err != nil {
 		a.logLine("固件包解析失败：" + err.Error())
 		return nil, friendlyError("固件包解析失败", err)
@@ -272,6 +280,64 @@ func (a *App) prepareCacheDirs() error {
 		return fmt.Errorf("无法创建 ESP-IDF 组件缓存目录：%w", err)
 	}
 	return nil
+}
+
+func (a *App) preparePackageWorkspace() (string, error) {
+	var lastErr error
+	for _, dir := range packageWorkspaceCandidates(a.cacheDir) {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			lastErr = fmt.Errorf("无法创建固件工作目录 %s：%w", dir, err)
+			continue
+		}
+		return dir, nil
+	}
+	if lastErr != nil {
+		return "", lastErr
+	}
+	return "", fmt.Errorf("没有可用的固件工作目录")
+}
+
+func packageWorkspaceCandidates(cacheDir string) []string {
+	candidates := []string{}
+	if override := strings.TrimSpace(os.Getenv(packageWorkspaceOverrideEnv)); override != "" {
+		candidates = appendUniquePath(candidates, override)
+	}
+	if shortRoot := shortPackageWorkspacePath(cacheDir); shortRoot != "" {
+		candidates = appendUniquePath(candidates, shortRoot)
+	}
+	if cacheDir != "" {
+		candidates = appendUniquePath(candidates, filepath.Join(cacheDir, "packages"))
+	}
+	return candidates
+}
+
+func shortPackageWorkspacePath(cacheDir string) string {
+	if cacheDir == "" {
+		return ""
+	}
+	volume := filepath.VolumeName(cacheDir)
+	if volume == "" {
+		if abs, err := filepath.Abs(cacheDir); err == nil {
+			volume = filepath.VolumeName(abs)
+		}
+	}
+	if volume == "" {
+		return ""
+	}
+	return filepath.Join(volume+string(os.PathSeparator), "P")
+}
+
+func appendUniquePath(paths []string, path string) []string {
+	if strings.TrimSpace(path) == "" {
+		return paths
+	}
+	clean := filepath.Clean(path)
+	for _, existing := range paths {
+		if strings.EqualFold(existing, clean) {
+			return paths
+		}
+	}
+	return append(paths, clean)
 }
 
 func (a *App) prepareLogFile() error {

@@ -49,13 +49,14 @@ func TestAnalyzeZipWithFlasherArgs(t *testing.T) {
 }
 
 func TestAnalyzeZipWithSourceOnlyProject(t *testing.T) {
+	workspace := t.TempDir()
 	zipPath := makeZip(t, map[string]string{
 		"SKYLOONG-main/CMakeLists.txt": "idf_component_register()",
 		"SKYLOONG-main/main/main.cpp":  "void app_main(){}",
 		"SKYLOONG-main/sdkconfig":      "CONFIG_IDF_TARGET=\"esp32s3\"",
 	})
 
-	analysis, err := AnalyzeZip(zipPath, t.TempDir())
+	analysis, err := AnalyzeZip(zipPath, workspace)
 	if err != nil {
 		t.Fatalf("AnalyzeZip() error = %v", err)
 	}
@@ -67,6 +68,15 @@ func TestAnalyzeZipWithSourceOnlyProject(t *testing.T) {
 	}
 	if analysis.Kind != KindSource {
 		t.Fatalf("kind = %q", analysis.Kind)
+	}
+	if filepath.Base(analysis.Root) == "SKYLOONG-main" {
+		t.Fatalf("single zip root should be flattened to keep build paths short, got %q", analysis.Root)
+	}
+	if !strings.HasPrefix(analysis.Root, workspace) {
+		t.Fatalf("analysis root %q should stay under workspace %q", analysis.Root, workspace)
+	}
+	if len(filepath.Base(analysis.Root)) > 10 {
+		t.Fatalf("package work dir base should be short, got %q", filepath.Base(analysis.Root))
 	}
 }
 

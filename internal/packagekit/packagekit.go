@@ -63,7 +63,7 @@ func AnalyzeZip(zipPath string, workspace string) (*Analysis, error) {
 	if workspace == "" {
 		workspace = os.TempDir()
 	}
-	root := filepath.Join(workspace, "skyloong-package-"+time.Now().Format("20060102150405"))
+	root := filepath.Join(workspace, shortPackageID())
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return nil, fmt.Errorf("无法创建固件解压文件夹：%w", err)
 	}
@@ -283,7 +283,24 @@ func collapseSingleRoot(root string) string {
 	if err != nil || len(entries) != 1 || !entries[0].IsDir() {
 		return root
 	}
-	return filepath.Join(root, entries[0].Name())
+	child := filepath.Join(root, entries[0].Name())
+	childEntries, err := os.ReadDir(child)
+	if err != nil {
+		return child
+	}
+	for _, entry := range childEntries {
+		if err := os.Rename(filepath.Join(child, entry.Name()), filepath.Join(root, entry.Name())); err != nil {
+			return child
+		}
+	}
+	if err := os.Remove(child); err != nil {
+		return child
+	}
+	return root
+}
+
+func shortPackageID() string {
+	return "p" + strconv.FormatInt(time.Now().UnixNano()%2176782336, 36)
 }
 
 func isInside(root string, target string) bool {

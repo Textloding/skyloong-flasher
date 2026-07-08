@@ -61,6 +61,28 @@ func TestPrepareCacheDirsCreatesExpectedFolders(t *testing.T) {
 	}
 }
 
+func TestPackageWorkspaceCandidatesPreferShortDriveRoot(t *testing.T) {
+	t.Setenv("SKYLOONG_PACKAGE_WORKSPACE_PATH", "")
+
+	candidates := packageWorkspaceCandidates(`C:\Users\Administrator\AppData\Local\SkyloongFlasher`)
+	if len(candidates) < 2 {
+		t.Fatalf("expected package workspace fallback candidates, got %#v", candidates)
+	}
+	if candidates[0] != filepath.Join(`C:\`, "P") {
+		t.Fatalf("first package workspace = %q, want %q", candidates[0], filepath.Join(`C:\`, "P"))
+	}
+}
+
+func TestPackageWorkspaceCandidatesRespectOverride(t *testing.T) {
+	override := filepath.Join(t.TempDir(), "pkg")
+	t.Setenv("SKYLOONG_PACKAGE_WORKSPACE_PATH", override)
+
+	candidates := packageWorkspaceCandidates(`C:\Users\Administrator\AppData\Local\SkyloongFlasher`)
+	if candidates[0] != override {
+		t.Fatalf("first package workspace = %q, want override %q", candidates[0], override)
+	}
+}
+
 func formatTestNumber(n int) string {
 	return string(rune('0'+n/100)) + string(rune('0'+n/10%10)) + string(rune('0'+n%10))
 }
