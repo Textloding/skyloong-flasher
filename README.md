@@ -166,9 +166,11 @@ wails build
 
 Windows 下 ESP-IDF 组件有些测试文件路径非常深，默认组件缓存目录可能触发路径过长。新版会把 `IDF_COMPONENT_CACHE_PATH` 优先指向 `C:\SLCM`，如果该目录不可写，会自动尝试 `ProgramData`、系统临时目录和工具本地缓存目录。高级日志里会出现“ESP-IDF 组件缓存目录：...”用于确认实际路径。
 
-如果遇到 `espressif/esp-serial-flasher` 这类组件包内自带的 `test/target-example-src/**/build-*` 超长路径，工具会通过内置 Python 补丁给 `open`、`io.open`、`os.makedirs`、`os.stat` 等文件操作加上 Windows 长路径前缀。旧版本如果留下过缺文件的损坏缓存，新版会按 `CHECKSUMS.json` 检测并删除该组件缓存，让 ESP-IDF 重新完整下载和解压。
+如果遇到 `espressif/esp-serial-flasher` 这类组件包内自带的 `test/target-example-src/**/build-*` 超长路径，工具会通过内置 Python 补丁给 `open`、`io.open`、`os.open`、`os.makedirs`、`os.mkdir`、`os.stat`、`os.scandir`、`os.listdir`、`shutil.copytree`、`shutil.copy2` 等文件操作加上 Windows 长路径前缀，覆盖组件下载、缓存校验、复制到 `managed_components` 和构建产物解析流程。旧版本如果留下过缺文件的损坏缓存，新版会按 `CHECKSUMS.json` 检测并删除该组件缓存，让 ESP-IDF 重新完整下载和解压。
 
-新版还会把源码包解压到 `C:\P\<短ID>`，并在解压写入时直接剥离 zip 里常见的公共根目录，例如 `SKYLOONG-main`。工具不会再先完整解压再移动目录，因此遇到 `tools/web`、`web_new` 这类深层目录时也不会把源码根目录搬到一半；同时 Go 侧文件打开、创建、读取会使用 Windows 长路径前缀。特殊环境下可设置 `SKYLOONG_PACKAGE_WORKSPACE_PATH` 指向一个更短且可写的目录。
+构建进程会强制设置 `PYTHONUTF8=1` 和 `PYTHONIOENCODING=utf-8`，避免 ESP-IDF 在中文 Windows 环境下用 GBK 读取 CMake 日志时出现 `UnicodeDecodeError`。
+
+新版还会把源码包解压到 `C:\P\<短ID>`，并在解压写入时直接剥离 zip 里常见的公共根目录，例如 `SKYLOONG-main`。工具不会再先完整解压再移动目录，因此遇到 `tools/web`、`web_new` 这类深层目录时也不会把源码根目录搬到一半；同时 Go 侧的 GitHub 下载、固件 zip 解压、运行时工具解压、缓存创建、日志写入、目录扫描和构建产物检查都会使用 Windows 长路径前缀。特殊环境下可设置 `SKYLOONG_PACKAGE_WORKSPACE_PATH` 指向一个更短且可写的目录。
 
 如果旧版本已经失败过，直接用新版重新点击“准备环境并构建”即可。特殊环境下也可以在启动前设置 `SKYLOONG_COMPONENT_CACHE_PATH` 指向一个更短且可写的目录，例如 `D:\SLCM`。
 

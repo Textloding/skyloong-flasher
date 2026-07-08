@@ -379,7 +379,7 @@ func resolveFlashFiles(base string, files map[string]string) ([]FlashFile, error
 
 func findFirst(root string, name string) string {
 	var found string
-	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+	_ = walkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil || found != "" {
 			return nil
 		}
@@ -404,7 +404,7 @@ func isIDFSource(root string) bool {
 
 func findIDFSourceRoot(root string) string {
 	var found string
-	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+	_ = walkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil || found != "" || !d.IsDir() {
 			return nil
 		}
@@ -462,6 +462,12 @@ func createPackageRoot(workspace string, nextID func() string) (string, error) {
 		}
 	}
 	return "", errors.New("cannot allocate short firmware work dir")
+}
+
+func walkDir(root string, fn func(path string, d os.DirEntry, err error) error) error {
+	return filepath.WalkDir(windowsFilesystemPath(root), func(path string, d os.DirEntry, err error) error {
+		return fn(normalWindowsFilesystemPath(path), d, err)
+	})
 }
 
 func unrecognizedPackageSummary(zipPath string, extractedRoot string) string {
@@ -543,6 +549,19 @@ func windowsFilesystemPath(path string) string {
 	}
 	if filepath.VolumeName(clean) != "" {
 		return `\\?\` + clean
+	}
+	return path
+}
+
+func normalWindowsFilesystemPath(path string) string {
+	if goruntime.GOOS != "windows" || path == "" {
+		return path
+	}
+	if strings.HasPrefix(path, `\\?\UNC\`) {
+		return `\\` + strings.TrimPrefix(path, `\\?\UNC\`)
+	}
+	if strings.HasPrefix(path, `\\?\`) {
+		return strings.TrimPrefix(path, `\\?\`)
 	}
 	return path
 }

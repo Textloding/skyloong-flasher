@@ -68,6 +68,8 @@ func TestEIMInstallCommandUsesEspressifMirrorEnvironment(t *testing.T) {
 		"IDF_COMPONENT_STORAGE_URL=https://components-file.espressif.cn;https://components-file.espressif.com",
 		"PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple",
 		"PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn",
+		"PYTHONUTF8=1",
+		"PYTHONIOENCODING=utf-8",
 	} {
 		if !strings.Contains(env, want) {
 			t.Fatalf("install env missing %q in:\n%s", want, env)
@@ -128,6 +130,12 @@ func TestEIMRunCommandWrapsCommandAndVersion(t *testing.T) {
 	if got := envValue(cmd.Env, "PYTHONPATH"); !strings.Contains(got, filepath.Join(`C:\cache\cm`, "_python_patch")) {
 		t.Fatalf("PYTHONPATH should include Python patch dir, got %q", got)
 	}
+	if got := envValue(cmd.Env, "PYTHONUTF8"); got != "1" {
+		t.Fatalf("PYTHONUTF8 = %q, want 1", got)
+	}
+	if got := envValue(cmd.Env, "PYTHONIOENCODING"); got != "utf-8" {
+		t.Fatalf("PYTHONIOENCODING = %q, want utf-8", got)
+	}
 }
 
 func TestDetectInSetsComponentCachePath(t *testing.T) {
@@ -172,7 +180,21 @@ func TestPrepareComponentCacheDirInstallsPythonZipPatch(t *testing.T) {
 		t.Fatalf("expected sitecustomize patch at %s: %v", patchPath, err)
 	}
 	text := string(raw)
-	for _, want := range []string{"builtins.open", "io.open", "os.makedirs", "_skyloong_long_path"} {
+	for _, want := range []string{
+		"builtins.open",
+		"io.open",
+		"os.makedirs",
+		"os.scandir",
+		"os.listdir",
+		"os.open",
+		"def _skyloong_mkdir(path, *args, **kwargs)",
+		"shutil.copytree",
+		"shutil.copy2",
+		"shutil.copyfile",
+		"_skyloong_unbind_path",
+		"isinstance(path, int)",
+		"_skyloong_long_path",
+	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("sitecustomize.py missing %q in:\n%s", want, text)
 		}

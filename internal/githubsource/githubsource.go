@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 )
 
@@ -71,10 +72,10 @@ func Download(ctx context.Context, archiveURL string, dest string, progress Prog
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return fmt.Errorf("下载失败：HTTP %d", resp.StatusCode)
 	}
-	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+	if err := os.MkdirAll(windowsFilesystemPath(filepath.Dir(dest)), 0o755); err != nil {
 		return fmt.Errorf("无法创建下载文件夹：%w", err)
 	}
-	out, err := os.Create(dest)
+	out, err := os.Create(windowsFilesystemPath(dest))
 	if err != nil {
 		return fmt.Errorf("无法创建下载文件：%w", err)
 	}
@@ -152,4 +153,21 @@ func splitPath(p string) []string {
 		}
 	}
 	return out
+}
+
+func windowsFilesystemPath(path string) string {
+	if goruntime.GOOS != "windows" || path == "" {
+		return path
+	}
+	clean := filepath.Clean(path)
+	if strings.HasPrefix(clean, `\\?\`) {
+		return clean
+	}
+	if strings.HasPrefix(clean, `\\`) {
+		return `\\?\UNC\` + strings.TrimPrefix(clean, `\\`)
+	}
+	if filepath.VolumeName(clean) != "" {
+		return `\\?\` + clean
+	}
+	return path
 }

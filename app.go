@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"sync"
 	"time"
@@ -170,7 +171,7 @@ func (a *App) BuildSourcePackage() (*AnalyzeResponse, error) {
 	}
 	a.progress("构建固件", 92, "构建完成，正在重新解析刷机产物")
 	buildDir := filepath.Join(analysis.Root, "build")
-	if info, err := os.Stat(buildDir); err != nil || !info.IsDir() {
+	if info, err := os.Stat(windowsFilesystemPath(buildDir)); err != nil || !info.IsDir() {
 		if err == nil {
 			err = fmt.Errorf("路径不是文件夹：%s", buildDir)
 		}
@@ -272,7 +273,7 @@ func (a *App) prepareCacheDirs() error {
 		filepath.Join(a.cacheDir, "tools"),
 		filepath.Join(a.cacheDir, "logs"),
 	} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(windowsFilesystemPath(dir), 0o755); err != nil {
 			return fmt.Errorf("无法创建文件夹 %s：%w", dir, err)
 		}
 	}
@@ -285,7 +286,7 @@ func (a *App) prepareCacheDirs() error {
 func (a *App) preparePackageWorkspace() (string, error) {
 	var lastErr error
 	for _, dir := range packageWorkspaceCandidates(a.cacheDir) {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(windowsFilesystemPath(dir), 0o755); err != nil {
 			lastErr = fmt.Errorf("无法创建固件工作目录 %s：%w", dir, err)
 			continue
 		}
@@ -341,11 +342,11 @@ func appendUniquePath(paths []string, path string) []string {
 }
 
 func (a *App) prepareLogFile() error {
-	if err := os.MkdirAll(filepath.Join(a.cacheDir, "logs"), 0o755); err != nil {
+	if err := os.MkdirAll(windowsFilesystemPath(filepath.Join(a.cacheDir, "logs")), 0o755); err != nil {
 		return fmt.Errorf("无法创建日志文件夹：%w", err)
 	}
 	a.logFile = filepath.Join(a.cacheDir, "logs", time.Now().Format("20060102-150405")+".log")
-	file, err := os.OpenFile(a.logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	file, err := os.OpenFile(windowsFilesystemPath(a.logFile), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return fmt.Errorf("无法创建日志文件：%w", err)
 	}
@@ -362,7 +363,7 @@ func (a *App) logLine(line string) {
 	a.logMu.Unlock()
 
 	if logFile != "" {
-		if file, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); err == nil {
+		if file, err := os.OpenFile(windowsFilesystemPath(logFile), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); err == nil {
 			_, _ = file.WriteString(time.Now().Format("15:04:05 ") + line + "\n")
 			_ = file.Close()
 		}
@@ -469,4 +470,21 @@ func containsAny(text string, needles ...string) bool {
 		}
 	}
 	return false
+}
+
+func windowsFilesystemPath(path string) string {
+	if goruntime.GOOS != "windows" || path == "" {
+		return path
+	}
+	clean := filepath.Clean(path)
+	if strings.HasPrefix(clean, `\\?\`) {
+		return clean
+	}
+	if strings.HasPrefix(clean, `\\`) {
+		return `\\?\UNC\` + strings.TrimPrefix(clean, `\\`)
+	}
+	if filepath.VolumeName(clean) != "" {
+		return `\\?\` + clean
+	}
+	return path
 }

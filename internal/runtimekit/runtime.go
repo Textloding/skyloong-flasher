@@ -40,13 +40,29 @@ const (
 const siteCustomizeZipPatch = `import os
 import builtins
 import io
+import shutil
 
 _ORIGINAL_OPEN = builtins.open
 _ORIGINAL_IO_OPEN = io.open
+_ORIGINAL_OS_OPEN = os.open
 _ORIGINAL_MAKEDIRS = os.makedirs
 _ORIGINAL_MKDIR = os.mkdir
 _ORIGINAL_STAT = os.stat
 _ORIGINAL_LSTAT = getattr(os, "lstat", None)
+_ORIGINAL_SCANDIR = os.scandir
+_ORIGINAL_LISTDIR = os.listdir
+_ORIGINAL_RENAME = os.rename
+_ORIGINAL_REPLACE = os.replace
+_ORIGINAL_REMOVE = os.remove
+_ORIGINAL_UNLINK = os.unlink
+_ORIGINAL_RMDIR = os.rmdir
+_ORIGINAL_COPYTREE = shutil.copytree
+_ORIGINAL_COPY2 = shutil.copy2
+_ORIGINAL_COPY = shutil.copy
+_ORIGINAL_COPYFILE = shutil.copyfile
+_ORIGINAL_COPYSTAT = shutil.copystat
+_ORIGINAL_COPYMODE = shutil.copymode
+_ORIGINAL_RMTREE = shutil.rmtree
 
 def _skyloong_long_path(path):
     if os.name != "nt":
@@ -59,7 +75,7 @@ def _skyloong_long_path(path):
         return path
     if raw.startswith("\\\\?\\"):
         return raw
-    absolute = os.path.abspath(raw)
+    absolute = os.path.normpath(os.path.abspath(raw))
     if len(absolute) < 240:
         return path
     if absolute.startswith("\\\\"):
@@ -68,34 +84,99 @@ def _skyloong_long_path(path):
         return "\\\\?\\" + absolute
     return path
 
+def _skyloong_unbind_path(path, args):
+    if isinstance(path, int):
+        return path, args
+    try:
+        os.fspath(path)
+        return path, args
+    except TypeError:
+        if args:
+            return args[0], args[1:]
+        return path, args
+
+def _skyloong_one_path(func):
+    def wrapper(path, *args, **kwargs):
+        path, args = _skyloong_unbind_path(path, args)
+        return func(_skyloong_long_path(path), *args, **kwargs)
+    return wrapper
+
+def _skyloong_two_paths(func):
+    def wrapper(src, dst, *args, **kwargs):
+        src, remaining = _skyloong_unbind_path(src, (dst,) + args)
+        if not remaining:
+            return func(_skyloong_long_path(src), *args, **kwargs)
+        dst = remaining[0]
+        args = remaining[1:]
+        return func(_skyloong_long_path(src), _skyloong_long_path(dst), *args, **kwargs)
+    return wrapper
+
 def _skyloong_open(file, *args, **kwargs):
+    file, args = _skyloong_unbind_path(file, args)
+    if args and isinstance(args[0], int):
+        return _ORIGINAL_OS_OPEN(_skyloong_long_path(file), *args, **kwargs)
     return _ORIGINAL_OPEN(_skyloong_long_path(file), *args, **kwargs)
 
 def _skyloong_io_open(file, *args, **kwargs):
+    file, args = _skyloong_unbind_path(file, args)
+    if args and isinstance(args[0], int):
+        return _ORIGINAL_OS_OPEN(_skyloong_long_path(file), *args, **kwargs)
     return _ORIGINAL_IO_OPEN(_skyloong_long_path(file), *args, **kwargs)
 
-def _skyloong_makedirs(name, mode=0o777, exist_ok=False):
-    return _ORIGINAL_MAKEDIRS(_skyloong_long_path(name), mode=mode, exist_ok=exist_ok)
+def _skyloong_os_open(path, *args, **kwargs):
+    path, args = _skyloong_unbind_path(path, args)
+    return _ORIGINAL_OS_OPEN(_skyloong_long_path(path), *args, **kwargs)
 
-def _skyloong_mkdir(path, mode=0o777, *, dir_fd=None):
-    if dir_fd is not None:
-        return _ORIGINAL_MKDIR(path, mode=mode, dir_fd=dir_fd)
-    return _ORIGINAL_MKDIR(_skyloong_long_path(path), mode=mode)
+def _skyloong_makedirs(name, *args, **kwargs):
+    name, args = _skyloong_unbind_path(name, args)
+    return _ORIGINAL_MAKEDIRS(_skyloong_long_path(name), *args, **kwargs)
+
+def _skyloong_mkdir(path, *args, **kwargs):
+    path, args = _skyloong_unbind_path(path, args)
+    if kwargs.get("dir_fd") is not None:
+        return _ORIGINAL_MKDIR(path, *args, **kwargs)
+    return _ORIGINAL_MKDIR(_skyloong_long_path(path), *args, **kwargs)
 
 def _skyloong_stat(path, *args, **kwargs):
+    path, args = _skyloong_unbind_path(path, args)
     return _ORIGINAL_STAT(_skyloong_long_path(path), *args, **kwargs)
 
 def _skyloong_lstat(path, *args, **kwargs):
+    path, args = _skyloong_unbind_path(path, args)
     return _ORIGINAL_LSTAT(_skyloong_long_path(path), *args, **kwargs)
+
+def _skyloong_copytree(src, dst, *args, **kwargs):
+    src, remaining = _skyloong_unbind_path(src, (dst,) + args)
+    if remaining:
+        dst = remaining[0]
+        args = remaining[1:]
+    if "copy_function" not in kwargs and len(args) < 3:
+        kwargs["copy_function"] = shutil.copy2
+    return _ORIGINAL_COPYTREE(_skyloong_long_path(src), _skyloong_long_path(dst), *args, **kwargs)
 
 if not getattr(os, "_skyloong_long_path_patch_installed", False):
     builtins.open = _skyloong_open
     io.open = _skyloong_io_open
+    os.open = _skyloong_os_open
     os.makedirs = _skyloong_makedirs
     os.mkdir = _skyloong_mkdir
     os.stat = _skyloong_stat
     if _ORIGINAL_LSTAT is not None:
         os.lstat = _skyloong_lstat
+    os.scandir = _skyloong_one_path(_ORIGINAL_SCANDIR)
+    os.listdir = _skyloong_one_path(_ORIGINAL_LISTDIR)
+    os.rename = _skyloong_two_paths(_ORIGINAL_RENAME)
+    os.replace = _skyloong_two_paths(_ORIGINAL_REPLACE)
+    os.remove = _skyloong_one_path(_ORIGINAL_REMOVE)
+    os.unlink = _skyloong_one_path(_ORIGINAL_UNLINK)
+    os.rmdir = _skyloong_one_path(_ORIGINAL_RMDIR)
+    shutil.copytree = _skyloong_copytree
+    shutil.copy2 = _skyloong_two_paths(_ORIGINAL_COPY2)
+    shutil.copy = _skyloong_two_paths(_ORIGINAL_COPY)
+    shutil.copyfile = _skyloong_two_paths(_ORIGINAL_COPYFILE)
+    shutil.copystat = _skyloong_two_paths(_ORIGINAL_COPYSTAT)
+    shutil.copymode = _skyloong_two_paths(_ORIGINAL_COPYMODE)
+    shutil.rmtree = _skyloong_one_path(_ORIGINAL_RMTREE)
     os._skyloong_long_path_patch_installed = True
 `
 
@@ -195,10 +276,10 @@ func Ensure(ctx context.Context, cacheDir string, progress ProgressFunc, log Log
 
 	configDir := filepath.Join(cacheDir, "runtime", "eim-config")
 	installDir := filepath.Join(cacheDir, "runtime", "esp-idf")
-	if err := os.MkdirAll(configDir, 0o755); err != nil {
+	if err := os.MkdirAll(windowsFilesystemPath(configDir), 0o755); err != nil {
 		return Status{}, err
 	}
-	if err := os.MkdirAll(installDir, 0o755); err != nil {
+	if err := os.MkdirAll(windowsFilesystemPath(installDir), 0o755); err != nil {
 		return Status{}, err
 	}
 
@@ -301,7 +382,7 @@ func PrepareComponentCacheDir(cacheDir string) (string, error) {
 		if dir == "" {
 			continue
 		}
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(windowsFilesystemPath(dir), 0o755); err != nil {
 			lastErr = fmt.Errorf("%s: %w", dir, err)
 			continue
 		}
@@ -390,10 +471,10 @@ func preparePythonZipPatch(componentCachePath string) error {
 	if patchDir == "" {
 		return nil
 	}
-	if err := os.MkdirAll(patchDir, 0o755); err != nil {
+	if err := os.MkdirAll(windowsFilesystemPath(patchDir), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(patchDir, siteCustomizeName), []byte(siteCustomizeZipPatch), 0o644)
+	return os.WriteFile(windowsFilesystemPath(filepath.Join(patchDir, siteCustomizeName)), []byte(siteCustomizeZipPatch), 0o644)
 }
 
 func repairCorruptSerialFlasherCaches(componentCachePath string) error {
@@ -405,11 +486,12 @@ func repairCorruptSerialFlasherCaches(componentCachePath string) error {
 		"service_*",
 		"espressif__esp-serial-flasher_*",
 	)
-	matches, err := filepath.Glob(pattern)
+	matches, err := filepath.Glob(windowsFilesystemPath(pattern))
 	if err != nil {
 		return err
 	}
 	for _, dir := range matches {
+		dir = normalWindowsFilesystemPath(dir)
 		corrupt, err := componentCacheCorrupt(dir)
 		if err != nil {
 			return err
@@ -431,7 +513,7 @@ type componentChecksums struct {
 }
 
 func componentCacheCorrupt(componentDir string) (bool, error) {
-	raw, err := os.ReadFile(filepath.Join(componentDir, "CHECKSUMS.json"))
+	raw, err := os.ReadFile(windowsFilesystemPath(filepath.Join(componentDir, "CHECKSUMS.json")))
 	if os.IsNotExist(err) {
 		return true, nil
 	}
@@ -485,6 +567,19 @@ func windowsFilesystemPath(path string) string {
 	return path
 }
 
+func normalWindowsFilesystemPath(path string) string {
+	if goruntime.GOOS != "windows" || path == "" {
+		return path
+	}
+	if strings.HasPrefix(path, `\\?\UNC\`) {
+		return `\\` + strings.TrimPrefix(path, `\\?\UNC\`)
+	}
+	if strings.HasPrefix(path, `\\?\`) {
+		return strings.TrimPrefix(path, `\\?\`)
+	}
+	return path
+}
+
 func findGit(cacheDir string) (string, bool) {
 	if path, err := exec.LookPath("git.exe"); err == nil {
 		return path, true
@@ -506,7 +601,7 @@ func detectCachedGit(cacheDir string) (string, bool) {
 			filepath.Join(root, "runtime", "tools", "git", "cmd", "git.exe"),
 			filepath.Join(root, "runtime", "tools", "git", "mingw64", "bin", "git.exe"),
 		} {
-			if _, err := os.Stat(candidate); err == nil {
+			if _, err := os.Stat(windowsFilesystemPath(candidate)); err == nil {
 				return candidate, true
 			}
 		}
@@ -532,10 +627,10 @@ func detectCachedEIM(cacheDir string) (Status, bool) {
 				configDir: filepath.Join(root, "runtime", "eim-config"),
 			},
 		} {
-			if _, err := os.Stat(layout.eimPath); err != nil {
+			if _, err := os.Stat(windowsFilesystemPath(layout.eimPath)); err != nil {
 				continue
 			}
-			if _, err := os.Stat(filepath.Join(layout.configDir, "eim_idf.json")); err != nil {
+			if _, err := os.Stat(windowsFilesystemPath(filepath.Join(layout.configDir, "eim_idf.json"))); err != nil {
 				continue
 			}
 			return eimStatus(layout.eimPath, layout.configDir), true
@@ -576,7 +671,7 @@ func ensureGit(ctx context.Context, cacheDir string, progress ProgressFunc, log 
 	toolDir := filepath.Join(cacheDir, "tools")
 	gitDir := filepath.Join(toolDir, "git")
 	gitPath := filepath.Join(gitDir, "cmd", "git.exe")
-	if err := os.MkdirAll(toolDir, 0o755); err != nil {
+	if err := os.MkdirAll(windowsFilesystemPath(toolDir), 0o755); err != nil {
 		return "", err
 	}
 
@@ -611,7 +706,7 @@ func ensureGit(ctx context.Context, cacheDir string, progress ProgressFunc, log 
 		})
 		if err != nil {
 			lastErr = err
-			_ = os.Remove(tmpZip)
+			_ = os.Remove(windowsFilesystemPath(tmpZip))
 			if log != nil {
 				log(fmt.Sprintf("%s 下载便携 Git 失败：%v，准备切换备用源。", sourceName, err))
 			}
@@ -621,7 +716,7 @@ func ensureGit(ctx context.Context, cacheDir string, progress ProgressFunc, log 
 			continue
 		}
 
-		_ = os.RemoveAll(tmpDir)
+		_ = os.RemoveAll(windowsFilesystemPath(tmpDir))
 		if progress != nil {
 			progress("解压构建环境", 25, "正在解压便携 Git")
 		}
@@ -632,24 +727,24 @@ func ensureGit(ctx context.Context, cacheDir string, progress ProgressFunc, log 
 			progress("解压构建环境", 25+int(float64(done)/float64(total)*8), fmt.Sprintf("正在解压便携 Git：%d / %d", done, total))
 		}); err != nil {
 			lastErr = err
-			_ = os.Remove(tmpZip)
-			_ = os.RemoveAll(tmpDir)
+			_ = os.Remove(windowsFilesystemPath(tmpZip))
+			_ = os.RemoveAll(windowsFilesystemPath(tmpDir))
 			if log != nil {
 				log(fmt.Sprintf("便携 Git 解压失败：%v，准备切换备用源。", err))
 			}
 			continue
 		}
-		_ = os.Remove(tmpZip)
-		_ = os.RemoveAll(gitDir)
-		if err := os.Rename(tmpDir, gitDir); err != nil {
+		_ = os.Remove(windowsFilesystemPath(tmpZip))
+		_ = os.RemoveAll(windowsFilesystemPath(gitDir))
+		if err := os.Rename(windowsFilesystemPath(tmpDir), windowsFilesystemPath(gitDir)); err != nil {
 			lastErr = err
-			_ = os.RemoveAll(tmpDir)
+			_ = os.RemoveAll(windowsFilesystemPath(tmpDir))
 			if log != nil {
 				log(fmt.Sprintf("便携 Git 缓存写入失败：%v，准备切换备用源。", err))
 			}
 			continue
 		}
-		if _, err := os.Stat(gitPath); err != nil {
+		if _, err := os.Stat(windowsFilesystemPath(gitPath)); err != nil {
 			if fallback, ok := detectCachedGit(cacheDir); ok {
 				gitPath = fallback
 			} else {
@@ -674,10 +769,10 @@ func ensureEIM(ctx context.Context, cacheDir string, progress ProgressFunc, log 
 	}
 	toolDir := filepath.Join(cacheDir, "tools")
 	eimPath := filepath.Join(toolDir, "eim.exe")
-	if _, err := os.Stat(eimPath); err == nil {
+	if _, err := os.Stat(windowsFilesystemPath(eimPath)); err == nil {
 		return eimPath, nil
 	}
-	if err := os.MkdirAll(toolDir, 0o755); err != nil {
+	if err := os.MkdirAll(windowsFilesystemPath(toolDir), 0o755); err != nil {
 		return "", err
 	}
 	if log != nil {
@@ -707,13 +802,13 @@ func ensureEIM(ctx context.Context, cacheDir string, progress ProgressFunc, log 
 			if log != nil {
 				log(fmt.Sprintf("EIM CLI 下载完成：%s", sourceName))
 			}
-			if err := os.Rename(tmp, eimPath); err != nil {
+			if err := os.Rename(windowsFilesystemPath(tmp), windowsFilesystemPath(eimPath)); err != nil {
 				return "", err
 			}
 			return eimPath, nil
 		} else {
 			lastErr = err
-			_ = os.Remove(tmp)
+			_ = os.Remove(windowsFilesystemPath(tmp))
 			if log != nil {
 				log(fmt.Sprintf("%s 下载失败：%v，准备切换备用源。", sourceName, err))
 			}
@@ -738,7 +833,7 @@ func downloadFile(ctx context.Context, url string, dest string, progress func(do
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
-	out, err := os.Create(dest)
+	out, err := os.Create(windowsFilesystemPath(dest))
 	if err != nil {
 		return err
 	}
@@ -767,7 +862,7 @@ func downloadFile(ctx context.Context, url string, dest string, progress func(do
 }
 
 func unzip(zipPath string, destDir string, progress func(done int, total int)) error {
-	reader, err := zip.OpenReader(zipPath)
+	reader, err := zip.OpenReader(windowsFilesystemPath(zipPath))
 	if err != nil {
 		return err
 	}
@@ -786,7 +881,7 @@ func unzip(zipPath string, destDir string, progress func(done int, total int)) e
 			return fmt.Errorf("zip 内包含非法路径：%s", file.Name)
 		}
 		if file.FileInfo().IsDir() {
-			if err := os.MkdirAll(targetAbs, 0o755); err != nil {
+			if err := os.MkdirAll(windowsFilesystemPath(targetAbs), 0o755); err != nil {
 				return err
 			}
 			if progress != nil {
@@ -794,14 +889,14 @@ func unzip(zipPath string, destDir string, progress func(done int, total int)) e
 			}
 			continue
 		}
-		if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
+		if err := os.MkdirAll(windowsFilesystemPath(filepath.Dir(targetAbs)), 0o755); err != nil {
 			return err
 		}
 		src, err := file.Open()
 		if err != nil {
 			return err
 		}
-		dst, err := os.OpenFile(targetAbs, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, file.Mode())
+		dst, err := os.OpenFile(windowsFilesystemPath(targetAbs), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, file.Mode())
 		if err != nil {
 			_ = src.Close()
 			return err
@@ -888,6 +983,8 @@ func runtimeEnv(base []string, componentCachePath string, toolPaths ...string) [
 		"IDF_COMPONENT_STORAGE_URL": "https://components-file.espressif.cn;https://components-file.espressif.com",
 		"PIP_INDEX_URL":             "https://pypi.tuna.tsinghua.edu.cn/simple",
 		"PIP_TRUSTED_HOST":          "pypi.tuna.tsinghua.edu.cn",
+		"PYTHONUTF8":                "1",
+		"PYTHONIOENCODING":          "utf-8",
 	}
 	if componentCachePath != "" {
 		values["IDF_COMPONENT_CACHE_PATH"] = componentCachePath
@@ -1033,14 +1130,14 @@ func detectIDF() Status {
 		status.IDFPyPath = idfpy
 	}
 	for _, export := range exportCandidates() {
-		if _, err := os.Stat(export); err == nil {
+		if _, err := os.Stat(windowsFilesystemPath(export)); err == nil {
 			status.CanBuild = true
 			status.ExportScript = export
 			break
 		}
 	}
 	for _, tool := range candidates {
-		if _, err := os.Stat(tool); err == nil {
+		if _, err := os.Stat(windowsFilesystemPath(tool)); err == nil {
 			if python, ok := findPython(); ok {
 				status.Available = true
 				status.Kind = KindPythonScript
