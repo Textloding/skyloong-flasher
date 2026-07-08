@@ -41,6 +41,7 @@ func Run(ctx context.Context, status runtimekit.Status, sourceRoot string, log L
 	}
 	command := processutil.CommandContext(ctx, cmd.Path, cmd.Args[1:]...)
 	command.Dir = sourceRoot
+	command.Env = cmd.Env
 	stdout, err := command.StdoutPipe()
 	if err != nil {
 		return err

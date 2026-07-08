@@ -27,6 +27,37 @@ func TestEIMInstallCommandUsesNonInteractiveCacheInstall(t *testing.T) {
 	}
 }
 
+func TestEIMDownloadSourcesPreferEspressifMirrors(t *testing.T) {
+	sources := EIMDownloadSources()
+	if len(sources) < 3 {
+		t.Fatalf("expected mirror fallback sources, got %#v", sources)
+	}
+	if !strings.Contains(sources[0], "dl.espressif.cn/github_assets") {
+		t.Fatalf("first source should be China mirror, got %q", sources[0])
+	}
+	if !strings.Contains(sources[1], "dl.espressif.com/github_assets") {
+		t.Fatalf("second source should be international Espressif mirror, got %q", sources[1])
+	}
+	if !strings.Contains(sources[len(sources)-1], "github.com/espressif/idf-im-ui") {
+		t.Fatalf("last source should be GitHub fallback, got %q", sources[len(sources)-1])
+	}
+}
+
+func TestEIMInstallCommandUsesEspressifMirrorEnvironment(t *testing.T) {
+	cmd := EIMInstallCommand(`C:\tools\eim.exe`, `C:\cache\eim`, `C:\cache\runtime`, "v5.1.4")
+	env := strings.Join(cmd.Env, "\n")
+
+	for _, want := range []string{
+		"IDF_GITHUB_ASSETS=dl.espressif.cn/github_assets",
+		"PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple",
+		"PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn",
+	} {
+		if !strings.Contains(env, want) {
+			t.Fatalf("install env missing %q in:\n%s", want, env)
+		}
+	}
+}
+
 func TestEIMRunCommandWrapsCommandAndVersion(t *testing.T) {
 	status := Status{
 		Kind:        KindEIM,

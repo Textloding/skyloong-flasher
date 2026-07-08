@@ -64,6 +64,7 @@ func Run(ctx context.Context, status runtimekit.Status, analysis *packagekit.Ana
 		return err
 	}
 	command := processutil.CommandContext(ctx, cmd.Path, cmd.Args[1:]...)
+	command.Env = cmd.Env
 	stdout, err := command.StdoutPipe()
 	if err != nil {
 		return err

@@ -23,7 +23,7 @@ const (
 	KindEIM          = "eim"
 
 	DefaultIDFVersion = "v5.1.4"
-	EIMDownloadURL    = "https://github.com/espressif/idf-im-ui/releases/download/v0.17.0/eim-cli-windows-x64.exe"
+	eimAssetPath      = "espressif/idf-im-ui/releases/download/v0.17.0/eim-cli-windows-x64.exe"
 )
 
 type Status struct {
@@ -138,7 +138,7 @@ func Ensure(ctx context.Context, cacheDir string, progress ProgressFunc, log Log
 }
 
 func EIMInstallCommand(eimPath string, configDir string, installDir string, version string) *exec.Cmd {
-	return processutil.Command(
+	cmd := processutil.Command(
 		eimPath,
 		"install",
 		"--path", installDir,
@@ -149,8 +149,11 @@ func EIMInstallCommand(eimPath string, configDir string, installDir string, vers
 		"--do-not-track", "true",
 		"--cleanup", "false",
 		"--locale", "cn",
+		"--pypi-mirror", "https://pypi.tuna.tsinghua.edu.cn/simple",
 		"--esp-idf-json-path", configDir,
 	)
+	cmd.Env = mirrorEnv(os.Environ())
+	return cmd
 }
 
 func EIMRunCommand(status Status, args ...string) *exec.Cmd {
@@ -162,7 +165,17 @@ func EIMRunCommand(status Status, args ...string) *exec.Cmd {
 	if status.IDFVersion != "" {
 		cmdArgs = append(cmdArgs, status.IDFVersion)
 	}
-	return processutil.Command(status.EIMPath, cmdArgs...)
+	cmd := processutil.Command(status.EIMPath, cmdArgs...)
+	cmd.Env = mirrorEnv(os.Environ())
+	return cmd
+}
+
+func EIMDownloadSources() []string {
+	return []string{
+		"https://dl.espressif.cn/github_assets/" + eimAssetPath,
+		"https://dl.espressif.com/github_assets/" + eimAssetPath,
+		"https://github.com/" + eimAssetPath,
+	}
 }
 
 func detectCachedEIM(cacheDir string) (Status, bool) {
@@ -232,23 +245,45 @@ func ensureEIM(ctx context.Context, cacheDir string, progress ProgressFunc, log 
 		log("正在下载 Espressif EIM CLI，用于自动准备 ESP-IDF。")
 	}
 	tmp := eimPath + ".download"
-	if err := downloadFile(ctx, EIMDownloadURL, tmp, func(downloaded int64, total int64) {
-		if progress == nil {
-			return
+	var lastErr error
+	for index, source := range EIMDownloadSources() {
+		sourceName := downloadSourceName(source)
+		if log != nil {
+			log(fmt.Sprintf("正在尝试下载 EIM CLI：%s", sourceName))
 		}
-		if total > 0 {
-			percent := 5 + int(float64(downloaded)/float64(total)*25)
-			progress("下载构建环境", percent, fmt.Sprintf("正在下载 EIM CLI：%s / %s", formatBytes(downloaded), formatBytes(total)))
-			return
+		if progress != nil {
+			progress("下载构建环境", 6+index*4, fmt.Sprintf("正在连接 %s", sourceName))
 		}
-		progress("下载构建环境", 12, fmt.Sprintf("正在下载 EIM CLI：%s", formatBytes(downloaded)))
-	}); err != nil {
-		return "", fmt.Errorf("EIM CLI 下载失败：%w", err)
+		if err := downloadFile(ctx, source, tmp, func(downloaded int64, total int64) {
+			if progress == nil {
+				return
+			}
+			if total > 0 {
+				percent := 8 + index*4 + int(float64(downloaded)/float64(total)*18)
+				progress("下载构建环境", percent, fmt.Sprintf("正在从 %s 下载 EIM CLI：%s / %s", sourceName, formatBytes(downloaded), formatBytes(total)))
+				return
+			}
+			progress("下载构建环境", 12+index*4, fmt.Sprintf("正在从 %s 下载 EIM CLI：%s", sourceName, formatBytes(downloaded)))
+		}); err == nil {
+			if log != nil {
+				log(fmt.Sprintf("EIM CLI 下载完成：%s", sourceName))
+			}
+			if err := os.Rename(tmp, eimPath); err != nil {
+				return "", err
+			}
+			return eimPath, nil
+		} else {
+			lastErr = err
+			_ = os.Remove(tmp)
+			if log != nil {
+				log(fmt.Sprintf("%s 下载失败：%v，准备切换备用源。", sourceName, err))
+			}
+			if progress != nil {
+				progress("下载构建环境", 12+index*5, fmt.Sprintf("%s 连接失败，正在切换备用源", sourceName))
+			}
+		}
 	}
-	if err := os.Rename(tmp, eimPath); err != nil {
-		return "", err
-	}
-	return eimPath, nil
+	return "", fmt.Errorf("EIM CLI 下载失败，已尝试乐鑫国内镜像、乐鑫国际镜像和 GitHub：%w", lastErr)
 }
 
 func downloadFile(ctx context.Context, url string, dest string, progress func(downloaded int64, total int64)) error {
@@ -294,6 +329,8 @@ func downloadFile(ctx context.Context, url string, dest string, progress func(do
 
 func runLogged(ctx context.Context, cmd *exec.Cmd, log LogFunc) error {
 	command := processutil.CommandContext(ctx, cmd.Path, cmd.Args[1:]...)
+	command.Env = cmd.Env
+	command.Dir = cmd.Dir
 	stdout, err := command.StdoutPipe()
 	if err != nil {
 		return err
@@ -340,6 +377,48 @@ func quoteArg(arg string) string {
 		return arg
 	}
 	return `"` + strings.ReplaceAll(arg, `"`, `\"`) + `"`
+}
+
+func mirrorEnv(base []string) []string {
+	return upsertEnv(base, map[string]string{
+		"IDF_GITHUB_ASSETS": "dl.espressif.cn/github_assets",
+		"PIP_INDEX_URL":     "https://pypi.tuna.tsinghua.edu.cn/simple",
+		"PIP_TRUSTED_HOST":  "pypi.tuna.tsinghua.edu.cn",
+	})
+}
+
+func upsertEnv(base []string, values map[string]string) []string {
+	out := append([]string{}, base...)
+	seen := map[string]bool{}
+	for i, item := range out {
+		key, _, ok := strings.Cut(item, "=")
+		if !ok {
+			continue
+		}
+		if value, exists := values[key]; exists {
+			out[i] = key + "=" + value
+			seen[key] = true
+		}
+	}
+	for key, value := range values {
+		if !seen[key] {
+			out = append(out, key+"="+value)
+		}
+	}
+	return out
+}
+
+func downloadSourceName(url string) string {
+	switch {
+	case strings.Contains(url, "dl.espressif.cn"):
+		return "乐鑫国内镜像"
+	case strings.Contains(url, "dl.espressif.com"):
+		return "乐鑫国际镜像"
+	case strings.Contains(url, "github.com"):
+		return "GitHub"
+	default:
+		return url
+	}
 }
 
 func detectIDF() Status {
