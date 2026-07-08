@@ -15,10 +15,10 @@ SKYLOONG Flasher 是一个独立的 Windows 桌面刷机工具，面向 SKYLOONG
 - 选择本地固件 zip。
 - 输入 GitHub 仓库、分支或 zip 链接并下载。
 - 自动解析 `flasher_args.json` 或 `flash_args`。
-- 识别 ESP-IDF 源码包；检测到本机 ESP-IDF 时可一键构建。
+- 识别 ESP-IDF 源码包；没有本机 ESP-IDF 时也会自动下载并准备构建环境。
 - 扫描 Windows COM/PnP 设备。
 - 区分 SKYLOONG 键盘运行态 `VID_34BF&PID_FF0E` 和 ESP32-S3 下载态 `VID_303A&PID_1001`。
-- 检测本机 esptool/ESP-IDF runtime。
+- 检测本机、缓存和离线包内置的 esptool/ESP-IDF runtime。
 - 生成并执行 esptool 刷机命令。
 - 现代毛玻璃中文向导界面。
 - 下载、解析、扫描和刷机时显示实时阶段、进度条和高级日志。
@@ -33,7 +33,7 @@ SKYLOONG Flasher 是一个独立的 Windows 桌面刷机工具，面向 SKYLOONG
    - GitHub zip 链接。
 3. 点击“解析固件”。
 4. 如果工具提示“可直接刷”，按界面提示连接屏幕并进入下载模式。
-5. 如果工具提示“需要构建”，工具会检测本机 ESP-IDF；检测到后可点击“构建固件”。
+5. 如果工具提示“需要构建”，直接点击“准备环境并构建”。工具会自动下载 EIM CLI 和 ESP-IDF v5.1.4，并在界面里显示进度和日志。
 6. 工具检测到 ESP32-S3 刷机串口后，点击“开始刷机”。
 7. 刷机完成后等待设备自动重启。
 
@@ -65,7 +65,11 @@ https://github.com/Textloding/SKYLOONG/tree/idf-v5.1.4
 https://github.com/Textloding/SKYLOONG/archive/refs/heads/main.zip
 ```
 
-如果下载到的是源码包，工具会先识别为“需要构建”。检测到本机 ESP-IDF 时，可以在工具里一键构建。
+如果下载到的是源码包，工具会先识别为“需要构建”。用户不需要手动安装 ESP-IDF，点击“准备环境并构建”后，工具会自动准备构建环境并继续构建。
+
+首次自动准备 ESP-IDF 会下载较多文件，耗时取决于网络。准备完成后会缓存在本机，后续构建会直接复用。
+
+网络较差的用户，后续可以下载离线完整版压缩包。离线包会把 `runtime` 目录放在 exe 同级，工具启动后会优先识别这个内置运行时。
 
 ## 设备识别说明
 
@@ -94,6 +98,7 @@ https://github.com/Textloding/SKYLOONG/archive/refs/heads/main.zip
 
 - GitHub 下载进度。
 - zip 解析状态。
+- ESP-IDF 自动下载、安装和缓存进度。
 - ESP-IDF 构建日志。
 - 设备扫描结果。
 - esptool 刷机日志。

@@ -94,6 +94,7 @@ function App() {
   }, [analysis, runtime, selectedPort]);
 
   const bestDevice = devices.find((d) => d.canFlash) ?? devices[0];
+  const flashButtonText = busy ? "任务执行中..." : analysis?.needsBuild ? "请先构建固件" : "开始刷机";
 
   async function refreshRuntime() {
     setTaskProgress({ stage: "检查环境", percent: 20, message: "正在检测刷机运行时。" });
@@ -150,8 +151,8 @@ function App() {
   async function buildSource() {
     setBusy(true);
     setError("");
-    setLogs((items) => [...items, "开始构建源码包。"]);
-    setTaskProgress({ stage: "构建固件", percent: 5, message: "正在准备 ESP-IDF 构建。" });
+    setLogs((items) => [...items, "开始构建源码包。", "如果本机缺少 ESP-IDF，工具会自动下载并安装到缓存目录。"]);
+    setTaskProgress({ stage: "准备构建环境", percent: 5, message: "正在检查 ESP-IDF 构建环境。" });
     try {
       const result = await call<AnalyzeResponse>("BuildSourcePackage");
       setAnalysis(result.analysis);
@@ -171,7 +172,7 @@ function App() {
   async function flash() {
     setBusy(true);
     setError("");
-    setLogs((items) => [...items, "开始刷机任务。"]);
+    setLogs((items) => [...items, "开始刷机任务。", "如果缺少刷机运行时，工具会自动准备。"]);
     setTaskProgress({ stage: "刷机", percent: 5, message: "正在启动刷机进程。" });
     try {
       await call("StartFlash", { port: selectedPort, baud: 460800 });
@@ -197,7 +198,7 @@ function App() {
           <p className="subtitle">选择 GitHub 链接或固件 zip，工具会解析包、检查环境、识别屏幕串口，然后引导你完成刷机。</p>
         </div>
         <div className="status-cluster">
-          <StatusPill label="运行时" value={runtime?.available ? "已就绪" : "待准备"} tone={runtime?.available ? "good" : "warn"} />
+          <StatusPill label="运行时" value={runtime?.available ? "已就绪" : "可自动准备"} tone={runtime?.available ? "good" : "warn"} />
           <StatusPill label="设备" value={bestDevice ? bestDevice.mode || "已发现" : "未发现"} tone={bestDevice?.canFlash ? "good" : "warn"} />
           <StatusPill label="固件" value={analysis?.canFlash ? "可刷机" : analysis?.needsBuild ? "需构建" : "待选择"} tone={analysis?.canFlash ? "good" : "neutral"} />
         </div>
@@ -269,12 +270,12 @@ function App() {
           />
           {analysis?.needsBuild && (
             <div className="notice">
-              检测到源码包。{runtime?.canBuild ? "已发现 ESP-IDF 构建环境，可以直接构建。" : "还没有检测到 ESP-IDF 构建环境，后续会自动下载 runtime 并显示进度。"}
+              检测到源码包。{runtime?.canBuild ? "已发现 ESP-IDF 构建环境，可以直接构建。" : "点击下方按钮后，工具会自动下载并安装 ESP-IDF，然后继续构建，全程显示进度和日志。"}
             </div>
           )}
           {analysis?.needsBuild && (
-            <button className="primary" disabled={busy || !runtime?.canBuild} onClick={buildSource}>
-              {runtime?.canBuild ? "构建固件" : "等待运行时下载"}
+            <button className="primary" disabled={busy} onClick={buildSource}>
+              {busy ? "任务执行中..." : runtime?.canBuild ? "构建固件" : "准备环境并构建"}
             </button>
           )}
           {analysis?.flashFiles?.length ? (
@@ -331,8 +332,8 @@ function App() {
               ["目标", analysis?.chip ?? "esp32s3"],
             ]}
           />
-          <button className="primary danger" disabled={busy || !analysis?.canFlash || !runtime?.available || !selectedPort} onClick={flash}>
-            {busy ? "任务执行中..." : "开始刷机"}
+          <button className="primary danger" disabled={busy || !analysis?.canFlash || !selectedPort} onClick={flash}>
+            {flashButtonText}
           </button>
           <details className="logs" open>
             <summary>高级日志</summary>

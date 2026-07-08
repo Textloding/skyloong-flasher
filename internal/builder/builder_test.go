@@ -31,6 +31,26 @@ func TestBuildCommandWithIDFPy(t *testing.T) {
 	}
 }
 
+func TestBuildCommandWithEIMRuntime(t *testing.T) {
+	status := runtimekit.Status{
+		CanBuild:    true,
+		Kind:        runtimekit.KindEIM,
+		EIMPath:     `C:\tools\eim.exe`,
+		EIMJsonPath: `C:\cache\eim`,
+		IDFVersion:  "v5.1.4",
+	}
+	cmd, err := BuildCommand(status, `C:\work\SKYLOONG`)
+	if err != nil {
+		t.Fatalf("BuildCommand() error = %v", err)
+	}
+	got := strings.Join(cmd.Args, " ")
+	for _, want := range []string{"eim.exe", "run", "idf.py build", "v5.1.4"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("unexpected command: %q missing %q", got, want)
+		}
+	}
+}
+
 func TestBuildCommandRejectsMissingRuntime(t *testing.T) {
 	_, err := BuildCommand(runtimekit.Status{}, `C:\work\SKYLOONG`)
 	if err == nil {

@@ -47,6 +47,10 @@ func BuildCommand(status runtimekit.Status, analysis *packagekit.Analysis, port 
 		args = append(args, file.Offset, file.Path)
 	}
 
+	if status.Kind == runtimekit.KindEIM {
+		cmdArgs := append([]string{"esptool.py"}, args...)
+		return runtimekit.EIMRunCommand(status, cmdArgs...), nil
+	}
 	if status.Kind == runtimekit.KindPythonScript {
 		cmdArgs := append([]string{status.ToolPath}, args...)
 		return processutil.Command(status.PythonPath, cmdArgs...), nil

@@ -175,6 +175,9 @@ export namespace runtimekit {
 	    pythonPath: string;
 	    idfPyPath: string;
 	    exportScript: string;
+	    eimPath: string;
+	    eimJsonPath: string;
+	    idfVersion: string;
 	    message: string;
 	
 	    static createFrom(source: any = {}) {
@@ -190,6 +193,9 @@ export namespace runtimekit {
 	        this.pythonPath = source["pythonPath"];
 	        this.idfPyPath = source["idfPyPath"];
 	        this.exportScript = source["exportScript"];
+	        this.eimPath = source["eimPath"];
+	        this.eimJsonPath = source["eimJsonPath"];
+	        this.idfVersion = source["idfVersion"];
 	        this.message = source["message"];
 	    }
 	}

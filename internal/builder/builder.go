@@ -21,6 +21,9 @@ func BuildCommand(status runtimekit.Status, sourceRoot string) (*exec.Cmd, error
 	if !status.CanBuild {
 		return nil, errors.New("未检测到 ESP-IDF 构建环境")
 	}
+	if status.Kind == runtimekit.KindEIM {
+		return runtimekit.EIMRunCommand(status, "idf.py", "build"), nil
+	}
 	if status.ExportScript != "" {
 		script := ". '" + strings.ReplaceAll(status.ExportScript, "'", "''") + "'; idf.py build"
 		return processutil.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script), nil

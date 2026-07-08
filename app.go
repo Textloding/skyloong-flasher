@@ -106,7 +106,7 @@ func (a *App) ScanDevices() ([]device.Device, error) {
 }
 
 func (a *App) CheckRuntime() runtimekit.Status {
-	return runtimekit.Detect()
+	return runtimekit.DetectIn(a.cacheDir)
 }
 
 func (a *App) BuildSourcePackage() (*AnalyzeResponse, error) {
@@ -116,9 +116,12 @@ func (a *App) BuildSourcePackage() (*AnalyzeResponse, error) {
 	if analysis == nil || !analysis.NeedsBuild {
 		return nil, friendlyError("无法构建", fmt.Errorf("当前包不是源码包"))
 	}
-	status := runtimekit.Detect()
-	a.progress("构建固件", 5, "正在准备 ESP-IDF 构建")
-	err := builder.Run(a.ctx, status, analysis.Root, func(line string) {
+	status, err := a.ensureRuntime()
+	if err != nil {
+		return nil, friendlyError("构建环境准备失败", err)
+	}
+	a.progress("构建固件", 5, "正在启动 ESP-IDF 构建")
+	err = builder.Run(a.ctx, status, analysis.Root, func(line string) {
 		a.progress("构建固件", estimateBuildPercent(line), line)
 		a.emit("flash:log", map[string]interface{}{"line": line})
 	})
@@ -141,7 +144,14 @@ func (a *App) StartFlash(req FlashRequest) error {
 	if analysis == nil {
 		return friendlyError("无法刷机", fmt.Errorf("请先选择并解析固件包"))
 	}
-	status := runtimekit.Detect()
+	status := runtimekit.DetectIn(a.cacheDir)
+	if !status.Available {
+		var err error
+		status, err = a.ensureRuntime()
+		if err != nil {
+			return friendlyError("刷机运行时准备失败", err)
+		}
+	}
 	a.progress("刷机", 5, "正在启动刷机进程")
 	return flasher.Run(a.ctx, status, analysis, req.Port, req.Baud, func(line string) {
 		a.progress("刷机", estimateFlashPercent(line), line)
@@ -156,7 +166,7 @@ func (a *App) PreviewFlashCommand(req FlashRequest) (string, error) {
 	if analysis == nil {
 		return "", fmt.Errorf("请先选择并解析固件包")
 	}
-	cmd, err := flasher.BuildCommand(runtimekit.Detect(), analysis, req.Port, req.Baud)
+	cmd, err := flasher.BuildCommand(runtimekit.DetectIn(a.cacheDir), analysis, req.Port, req.Baud)
 	if err != nil {
 		return "", friendlyError("无法生成刷机命令", err)
 	}
@@ -170,9 +180,17 @@ func (a *App) withState(analysis *packagekit.Analysis) (*AnalyzeResponse, error)
 	devices, _ := device.Scan()
 	return &AnalyzeResponse{
 		Analysis: analysis,
-		Runtime:  runtimekit.Detect(),
+		Runtime:  runtimekit.DetectIn(a.cacheDir),
 		Devices:  devices,
 	}, nil
+}
+
+func (a *App) ensureRuntime() (runtimekit.Status, error) {
+	return runtimekit.Ensure(a.ctx, a.cacheDir, func(stage string, percent int, message string) {
+		a.progress(stage, percent, message)
+	}, func(line string) {
+		a.emit("flash:log", map[string]interface{}{"line": line})
+	})
 }
 
 func (a *App) emit(name string, payload interface{}) {
