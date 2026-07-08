@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"sync"
 
@@ -36,24 +38,65 @@ const (
 )
 
 const siteCustomizeZipPatch = `import os
-import zipfile
+import builtins
+import io
 
-_ORIGINAL_EXTRACT_MEMBER = getattr(zipfile.ZipFile, "_extract_member", None)
+_ORIGINAL_OPEN = builtins.open
+_ORIGINAL_IO_OPEN = io.open
+_ORIGINAL_MAKEDIRS = os.makedirs
+_ORIGINAL_MKDIR = os.mkdir
+_ORIGINAL_STAT = os.stat
+_ORIGINAL_LSTAT = getattr(os, "lstat", None)
 
-def _skyloong_should_skip_member(member_name):
-    name = str(member_name).replace("\\", "/")
-    probe = "/" + name
-    return "/test/target-example-src/" in probe and "/build-" in probe
+def _skyloong_long_path(path):
+    if os.name != "nt":
+        return path
+    try:
+        raw = os.fspath(path)
+    except TypeError:
+        return path
+    if not isinstance(raw, str):
+        return path
+    if raw.startswith("\\\\?\\"):
+        return raw
+    absolute = os.path.abspath(raw)
+    if len(absolute) < 240:
+        return path
+    if absolute.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + absolute[2:]
+    if len(absolute) > 2 and absolute[1] == ":":
+        return "\\\\?\\" + absolute
+    return path
 
-def _skyloong_extract_member(self, member, targetpath, pwd):
-    name = member.filename if hasattr(member, "filename") else str(member)
-    if _skyloong_should_skip_member(name):
-        return os.path.join(targetpath, name)
-    return _ORIGINAL_EXTRACT_MEMBER(self, member, targetpath, pwd)
+def _skyloong_open(file, *args, **kwargs):
+    return _ORIGINAL_OPEN(_skyloong_long_path(file), *args, **kwargs)
 
-if _ORIGINAL_EXTRACT_MEMBER is not None and not getattr(zipfile.ZipFile, "_skyloong_patch_installed", False):
-    zipfile.ZipFile._extract_member = _skyloong_extract_member
-    zipfile.ZipFile._skyloong_patch_installed = True
+def _skyloong_io_open(file, *args, **kwargs):
+    return _ORIGINAL_IO_OPEN(_skyloong_long_path(file), *args, **kwargs)
+
+def _skyloong_makedirs(name, mode=0o777, exist_ok=False):
+    return _ORIGINAL_MAKEDIRS(_skyloong_long_path(name), mode=mode, exist_ok=exist_ok)
+
+def _skyloong_mkdir(path, mode=0o777, *, dir_fd=None):
+    if dir_fd is not None:
+        return _ORIGINAL_MKDIR(path, mode=mode, dir_fd=dir_fd)
+    return _ORIGINAL_MKDIR(_skyloong_long_path(path), mode=mode)
+
+def _skyloong_stat(path, *args, **kwargs):
+    return _ORIGINAL_STAT(_skyloong_long_path(path), *args, **kwargs)
+
+def _skyloong_lstat(path, *args, **kwargs):
+    return _ORIGINAL_LSTAT(_skyloong_long_path(path), *args, **kwargs)
+
+if not getattr(os, "_skyloong_long_path_patch_installed", False):
+    builtins.open = _skyloong_open
+    io.open = _skyloong_io_open
+    os.makedirs = _skyloong_makedirs
+    os.mkdir = _skyloong_mkdir
+    os.stat = _skyloong_stat
+    if _ORIGINAL_LSTAT is not None:
+        os.lstat = _skyloong_lstat
+    os._skyloong_long_path_patch_installed = True
 `
 
 type Status struct {
@@ -266,7 +309,7 @@ func PrepareComponentCacheDir(cacheDir string) (string, error) {
 			lastErr = fmt.Errorf("%s: %w", dir, err)
 			continue
 		}
-		if err := sanitizeSerialFlasherBuildDirs(dir); err != nil {
+		if err := repairCorruptSerialFlasherCaches(dir); err != nil {
 			lastErr = fmt.Errorf("%s: %w", dir, err)
 			continue
 		}
@@ -353,7 +396,7 @@ func preparePythonZipPatch(componentCachePath string) error {
 	return os.WriteFile(filepath.Join(patchDir, siteCustomizeName), []byte(siteCustomizeZipPatch), 0o644)
 }
 
-func sanitizeSerialFlasherBuildDirs(componentCachePath string) error {
+func repairCorruptSerialFlasherCaches(componentCachePath string) error {
 	if componentCachePath == "" {
 		return nil
 	}
@@ -361,21 +404,85 @@ func sanitizeSerialFlasherBuildDirs(componentCachePath string) error {
 		componentCachePath,
 		"service_*",
 		"espressif__esp-serial-flasher_*",
-		"test",
-		"target-example-src",
-		"*",
-		"build-*",
 	)
 	matches, err := filepath.Glob(pattern)
 	if err != nil {
 		return err
 	}
 	for _, dir := range matches {
-		if err := os.RemoveAll(dir); err != nil {
+		corrupt, err := componentCacheCorrupt(dir)
+		if err != nil {
+			return err
+		}
+		if !corrupt {
+			continue
+		}
+		if err := os.RemoveAll(windowsFilesystemPath(dir)); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+type componentChecksums struct {
+	Files []struct {
+		Path string `json:"path"`
+	} `json:"files"`
+}
+
+func componentCacheCorrupt(componentDir string) (bool, error) {
+	raw, err := os.ReadFile(filepath.Join(componentDir, "CHECKSUMS.json"))
+	if os.IsNotExist(err) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	var checksums componentChecksums
+	if err := json.Unmarshal(raw, &checksums); err != nil {
+		return true, nil
+	}
+	componentAbs, err := filepath.Abs(componentDir)
+	if err != nil {
+		return false, err
+	}
+	for _, file := range checksums.Files {
+		if strings.TrimSpace(file.Path) == "" {
+			continue
+		}
+		target := filepath.Join(componentDir, filepath.FromSlash(file.Path))
+		targetAbs, err := filepath.Abs(target)
+		if err != nil {
+			return false, err
+		}
+		if targetAbs != componentAbs && !strings.HasPrefix(targetAbs, componentAbs+string(os.PathSeparator)) {
+			return true, nil
+		}
+		if _, err := os.Stat(windowsFilesystemPath(target)); err != nil {
+			if os.IsNotExist(err) {
+				return true, nil
+			}
+			return false, err
+		}
+	}
+	return false, nil
+}
+
+func windowsFilesystemPath(path string) string {
+	if goruntime.GOOS != "windows" || path == "" {
+		return path
+	}
+	clean := filepath.Clean(path)
+	if strings.HasPrefix(clean, `\\?\`) {
+		return clean
+	}
+	if strings.HasPrefix(clean, `\\`) {
+		return `\\?\UNC\` + strings.TrimPrefix(clean, `\\`)
+	}
+	if filepath.VolumeName(clean) != "" {
+		return `\\?\` + clean
+	}
+	return path
 }
 
 func findGit(cacheDir string) (string, bool) {

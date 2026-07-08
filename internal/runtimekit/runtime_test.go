@@ -172,53 +172,61 @@ func TestPrepareComponentCacheDirInstallsPythonZipPatch(t *testing.T) {
 		t.Fatalf("expected sitecustomize patch at %s: %v", patchPath, err)
 	}
 	text := string(raw)
-	for _, want := range []string{"zipfile.ZipFile._extract_member", "test/target-example-src", "/build-"} {
+	for _, want := range []string{"builtins.open", "io.open", "os.makedirs", "_skyloong_long_path"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("sitecustomize.py missing %q in:\n%s", want, text)
 		}
 	}
+	for _, forbidden := range []string{"target-example-src", "_skyloong_should_skip_member"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("sitecustomize.py should not skip component files, found %q in:\n%s", forbidden, text)
+		}
+	}
 }
 
-func TestPrepareComponentCacheDirRemovesStaleSerialFlasherBuildDirs(t *testing.T) {
+func TestPrepareComponentCacheDirRemovesCorruptSerialFlasherCache(t *testing.T) {
 	componentCache := filepath.Join(t.TempDir(), "cm")
 	t.Setenv("SKYLOONG_COMPONENT_CACHE_PATH", componentCache)
-	buildDir := filepath.Join(
+	componentDir := filepath.Join(
 		componentCache,
 		"service_d92d8f1e",
 		"espressif__esp-serial-flasher_1.11.0_6f5d6859",
-		"test",
-		"target-example-src",
-		"hello-world-ESP32-src",
-		"build-ram-esp32h2",
 	)
 	keepFile := filepath.Join(
 		componentCache,
 		"service_d92d8f1e",
-		"espressif__esp-serial-flasher_1.11.0_6f5d6859",
+		"espressif__cbor_0.6.1_dad9ca86",
 		"src",
-		"esp_loader.c",
+		"cbor.c",
 	)
-	if err := os.MkdirAll(buildDir, 0o755); err != nil {
+	if err := os.MkdirAll(componentDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(filepath.Dir(keepFile), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(buildDir, "stale.obj"), []byte("stale"), 0o644); err != nil {
+	if err := os.WriteFile(keepFile, []byte("source"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(keepFile, []byte("source"), 0o644); err != nil {
+	checksums := `{"version":"1.0","files":[{"path":"src/esp_loader.c"},{"path":"test/target-example-src/hello-world-ESP32-src/build-flash-esp32/.bin_timestamp"}]}`
+	if err := os.MkdirAll(filepath.Join(componentDir, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(componentDir, "src", "esp_loader.c"), []byte("source"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(componentDir, "CHECKSUMS.json"), []byte(checksums), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	if _, err := PrepareComponentCacheDir(t.TempDir()); err != nil {
 		t.Fatalf("PrepareComponentCacheDir() error = %v", err)
 	}
-	if _, err := os.Stat(buildDir); !os.IsNotExist(err) {
-		t.Fatalf("stale build dir should be removed, err=%v", err)
+	if _, err := os.Stat(componentDir); !os.IsNotExist(err) {
+		t.Fatalf("corrupt serial flasher component cache should be removed, err=%v", err)
 	}
 	if _, err := os.Stat(keepFile); err != nil {
-		t.Fatalf("component source file should stay, err=%v", err)
+		t.Fatalf("unrelated component cache should stay, err=%v", err)
 	}
 }
 
