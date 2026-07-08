@@ -1,0 +1,17 @@
+# Build outputs
+build/
+frontend/dist/*
+!frontend/dist/.gitkeep
+
+# Dependencies
+frontend/node_modules/
+frontend/.vite/
+frontend/package.json.md5
+
+# Local runtime cache
+.wails/
+
+# Logs and OS noise
+*.log
+Thumbs.db
+.DS_Store
