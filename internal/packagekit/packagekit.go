@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
+	goruntime "runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -55,19 +57,19 @@ type flasherArgsJSON struct {
 
 func AnalyzeZip(zipPath string, workspace string) (*Analysis, error) {
 	if zipPath == "" {
-		return nil, errors.New("请选择固件 zip 文件")
+		return nil, errors.New("please choose firmware zip file")
 	}
-	if info, err := os.Stat(zipPath); err != nil {
-		return nil, fmt.Errorf("找不到固件 zip 文件：%s", zipPath)
+	if info, err := os.Stat(windowsFilesystemPath(zipPath)); err != nil {
+		return nil, fmt.Errorf("firmware zip not found: %s", zipPath)
 	} else if info.IsDir() {
-		return nil, fmt.Errorf("选择的是文件夹，不是固件 zip 文件：%s", zipPath)
+		return nil, fmt.Errorf("selected path is a directory, not a firmware zip: %s", zipPath)
 	}
 	if workspace == "" {
 		workspace = os.TempDir()
 	}
 	root, err := createPackageRoot(workspace, shortPackageID)
 	if err != nil {
-		return nil, fmt.Errorf("无法创建固件解压文件夹：%w", err)
+		return nil, fmt.Errorf("cannot create firmware extraction dir: %w", err)
 	}
 	extracted, err := ExtractZip(zipPath, root)
 	if err != nil {
@@ -82,9 +84,9 @@ func AnalyzeZip(zipPath string, workspace string) (*Analysis, error) {
 }
 
 func ExtractZip(zipPath string, dest string) (string, error) {
-	reader, err := zip.OpenReader(zipPath)
+	reader, err := zip.OpenReader(windowsFilesystemPath(zipPath))
 	if err != nil {
-		return "", fmt.Errorf("无法打开 zip：%w", err)
+		return "", fmt.Errorf("cannot open zip: %w", err)
 	}
 	defer reader.Close()
 
@@ -92,29 +94,37 @@ func ExtractZip(zipPath string, dest string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(cleanDest, 0o755); err != nil {
+	if err := os.MkdirAll(windowsFilesystemPath(cleanDest), 0o755); err != nil {
 		return "", err
 	}
 
+	stripPrefix := zipSingleRootPrefix(reader.File)
 	for _, file := range reader.File {
-		target := filepath.Join(cleanDest, filepath.Clean(file.Name))
+		name, skip, err := stripZipRootPrefix(file.Name, stripPrefix)
+		if err != nil {
+			return "", err
+		}
+		if skip {
+			continue
+		}
+		target := filepath.Join(cleanDest, filepath.FromSlash(name))
 		if !isInside(cleanDest, target) {
-			return "", fmt.Errorf("zip 内包含不安全路径：%s", file.Name)
+			return "", fmt.Errorf("unsafe zip path: %s", file.Name)
 		}
 		if file.FileInfo().IsDir() {
-			if err := os.MkdirAll(target, 0o755); err != nil {
+			if err := os.MkdirAll(windowsFilesystemPath(target), 0o755); err != nil {
 				return "", err
 			}
 			continue
 		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		if err := os.MkdirAll(windowsFilesystemPath(filepath.Dir(target)), 0o755); err != nil {
 			return "", err
 		}
 		src, err := file.Open()
 		if err != nil {
 			return "", err
 		}
-		dst, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, file.FileInfo().Mode())
+		dst, err := os.OpenFile(windowsFilesystemPath(target), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, file.FileInfo().Mode())
 		if err != nil {
 			src.Close()
 			return "", err
@@ -132,6 +142,102 @@ func ExtractZip(zipPath string, dest string) (string, error) {
 	return collapseSingleRoot(cleanDest), nil
 }
 
+type zipNameParts struct {
+	parts []string
+	isDir bool
+}
+
+func zipSingleRootPrefix(files []*zip.File) []string {
+	items := make([]zipNameParts, 0, len(files))
+	for _, file := range files {
+		name, skip, err := cleanZipName(file.Name)
+		if err != nil || skip {
+			continue
+		}
+		items = append(items, zipNameParts{
+			parts: strings.Split(name, "/"),
+			isDir: file.FileInfo().IsDir(),
+		})
+	}
+
+	prefix := []string{}
+	for {
+		first := ""
+		hasChild := false
+		active := 0
+		for _, item := range items {
+			if len(item.parts) == 0 {
+				continue
+			}
+			active++
+			if first == "" {
+				first = item.parts[0]
+			} else if item.parts[0] != first {
+				return prefix
+			}
+			if len(item.parts) > 1 || item.isDir {
+				hasChild = true
+			}
+		}
+		if active == 0 || first == "" || !hasChild {
+			return prefix
+		}
+		prefix = append(prefix, first)
+		for i := range items {
+			if len(items[i].parts) > 0 {
+				items[i].parts = items[i].parts[1:]
+			}
+		}
+	}
+}
+
+func stripZipRootPrefix(rawName string, prefix []string) (string, bool, error) {
+	name, skip, err := cleanZipName(rawName)
+	if err != nil || skip {
+		return "", skip, err
+	}
+	parts := strings.Split(name, "/")
+	if len(parts) >= len(prefix) {
+		matches := true
+		for i, segment := range prefix {
+			if parts[i] != segment {
+				matches = false
+				break
+			}
+		}
+		if matches {
+			parts = parts[len(prefix):]
+		}
+	}
+	if len(parts) == 0 {
+		return "", true, nil
+	}
+	return strings.Join(parts, "/"), false, nil
+}
+
+func cleanZipName(rawName string) (string, bool, error) {
+	name := strings.ReplaceAll(rawName, "\\", "/")
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", true, nil
+	}
+	if path.IsAbs(name) || strings.HasPrefix(name, "/") {
+		return "", false, fmt.Errorf("unsafe zip path: %s", rawName)
+	}
+	firstSegment := strings.Split(name, "/")[0]
+	if strings.Contains(firstSegment, ":") {
+		return "", false, fmt.Errorf("unsafe zip path: %s", rawName)
+	}
+	clean := path.Clean(name)
+	if clean == "." {
+		return "", true, nil
+	}
+	if clean == ".." || strings.HasPrefix(clean, "../") {
+		return "", false, fmt.Errorf("unsafe zip path: %s", rawName)
+	}
+	return clean, false, nil
+}
+
 func AnalyzeDir(root string) (*Analysis, error) {
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
@@ -146,6 +252,13 @@ func AnalyzeDir(root string) (*Analysis, error) {
 		After:       "hard_reset",
 	}
 
+	if isIDFSource(absRoot) {
+		return analyzeSourceRoot(analysis, absRoot)
+	}
+	if sourceRoot := findIDFSourceRoot(absRoot); sourceRoot != "" {
+		return analyzeSourceRoot(analysis, sourceRoot)
+	}
+
 	flasherPath := findFirst(absRoot, "flasher_args.json")
 	if flasherPath != "" {
 		return analyzeFlasherJSON(analysis, flasherPath)
@@ -156,33 +269,33 @@ func AnalyzeDir(root string) (*Analysis, error) {
 		return analyzeFlashArgs(analysis, flashArgsPath)
 	}
 
-	if sourceRoot := findIDFSourceRoot(absRoot); sourceRoot != "" {
-		analysis.Root = sourceRoot
-		analysis.ProjectName = filepath.Base(sourceRoot)
-		analysis.Kind = KindSource
-		analysis.NeedsBuild = true
-		analysis.Messages = append(analysis.Messages, "Detected nested ESP-IDF source package; build is required before flashing.")
-		return analysis, nil
-	}
+	return analysis, errors.New("missing flasher_args.json, flash_args or ESP-IDF source structure")
+}
 
-	if isIDFSource(absRoot) {
-		analysis.Kind = KindSource
-		analysis.NeedsBuild = true
-		analysis.Messages = append(analysis.Messages, "检测到 ESP-IDF 源码包，需要先构建再刷机。")
-		return analysis, nil
+func analyzeSourceRoot(analysis *Analysis, sourceRoot string) (*Analysis, error) {
+	buildDir := filepath.Join(sourceRoot, "build")
+	if flasherPath := findFirst(buildDir, "flasher_args.json"); flasherPath != "" {
+		return analyzeFlasherJSON(analysis, flasherPath)
 	}
-
-	return analysis, errors.New("没有找到 flasher_args.json、flash_args 或 ESP-IDF 源码结构")
+	if flashArgsPath := findFirst(buildDir, "flash_args"); flashArgsPath != "" {
+		return analyzeFlashArgs(analysis, flashArgsPath)
+	}
+	analysis.Root = sourceRoot
+	analysis.ProjectName = filepath.Base(sourceRoot)
+	analysis.Kind = KindSource
+	analysis.NeedsBuild = true
+	analysis.Messages = append(analysis.Messages, "Detected flashable ESP-IDF build output.")
+	return analysis, nil
 }
 
 func analyzeFlasherJSON(analysis *Analysis, path string) (*Analysis, error) {
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(windowsFilesystemPath(path))
 	if err != nil {
 		return nil, err
 	}
 	var data flasherArgsJSON
 	if err := json.Unmarshal(raw, &data); err != nil {
-		return nil, fmt.Errorf("flasher_args.json 解析失败：%w", err)
+		return nil, fmt.Errorf("parse flasher_args.json failed: %w", err)
 	}
 
 	base := filepath.Dir(path)
@@ -205,12 +318,12 @@ func analyzeFlasherJSON(analysis *Analysis, path string) (*Analysis, error) {
 		return nil, err
 	}
 	analysis.FlashFiles = files
-	analysis.Messages = append(analysis.Messages, "检测到可直接刷机的 ESP-IDF 构建产物。")
+	analysis.Messages = append(analysis.Messages, "Detected ESP-IDF source package; build is required before flashing.")
 	return analysis, nil
 }
 
 func analyzeFlashArgs(analysis *Analysis, path string) (*Analysis, error) {
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(windowsFilesystemPath(path))
 	if err != nil {
 		return nil, err
 	}
@@ -239,7 +352,7 @@ func analyzeFlashArgs(analysis *Analysis, path string) (*Analysis, error) {
 	analysis.Kind = KindFlash
 	analysis.CanFlash = true
 	analysis.FlashFiles = resolved
-	analysis.Messages = append(analysis.Messages, "检测到 flash_args，可直接刷机。")
+	analysis.Messages = append(analysis.Messages, "Detected flash_args; package can be flashed directly.")
 	return analysis, nil
 }
 
@@ -255,9 +368,9 @@ func resolveFlashFiles(base string, files map[string]string) ([]FlashFile, error
 	out := make([]FlashFile, 0, len(offsets))
 	for _, offset := range offsets {
 		fullPath := filepath.Join(base, filepath.FromSlash(files[offset]))
-		info, err := os.Stat(fullPath)
+		info, err := os.Stat(windowsFilesystemPath(fullPath))
 		if err != nil {
-			return nil, fmt.Errorf("缺少刷机文件 %s：%w", files[offset], err)
+			return nil, fmt.Errorf("missing flash file %s: %w", files[offset], err)
 		}
 		out = append(out, FlashFile{Offset: offset, Path: fullPath, Size: info.Size()})
 	}
@@ -280,10 +393,10 @@ func findFirst(root string, name string) string {
 }
 
 func isIDFSource(root string) bool {
-	if _, err := os.Stat(filepath.Join(root, "CMakeLists.txt")); err != nil {
+	if _, err := os.Stat(windowsFilesystemPath(filepath.Join(root, "CMakeLists.txt"))); err != nil {
 		return false
 	}
-	if _, err := os.Stat(filepath.Join(root, "main")); err != nil {
+	if _, err := os.Stat(windowsFilesystemPath(filepath.Join(root, "main"))); err != nil {
 		return false
 	}
 	return true
@@ -313,23 +426,12 @@ func findIDFSourceRoot(root string) string {
 
 func collapseSingleRoot(root string) string {
 	for {
-		entries, err := os.ReadDir(root)
+		entries, err := os.ReadDir(windowsFilesystemPath(root))
 		if err != nil || len(entries) != 1 || !entries[0].IsDir() {
 			return root
 		}
 		child := filepath.Join(root, entries[0].Name())
-		childEntries, err := os.ReadDir(child)
-		if err != nil {
-			return child
-		}
-		for _, entry := range childEntries {
-			if err := os.Rename(filepath.Join(child, entry.Name()), filepath.Join(root, entry.Name())); err != nil {
-				return child
-			}
-		}
-		if err := os.Remove(child); err != nil {
-			return child
-		}
+		root = child
 	}
 }
 
@@ -342,7 +444,7 @@ func shortPackageID() string {
 }
 
 func createPackageRoot(workspace string, nextID func() string) (string, error) {
-	if err := os.MkdirAll(workspace, 0o755); err != nil {
+	if err := os.MkdirAll(windowsFilesystemPath(workspace), 0o755); err != nil {
 		return "", err
 	}
 	for attempt := 0; attempt < 64; attempt++ {
@@ -351,7 +453,7 @@ func createPackageRoot(workspace string, nextID func() string) (string, error) {
 			continue
 		}
 		root := filepath.Join(workspace, id)
-		if err := os.Mkdir(root, 0o755); err == nil {
+		if err := os.Mkdir(windowsFilesystemPath(root), 0o755); err == nil {
 			return root, nil
 		} else if os.IsExist(err) {
 			continue
@@ -359,7 +461,7 @@ func createPackageRoot(workspace string, nextID func() string) (string, error) {
 			return "", err
 		}
 	}
-	return "", errors.New("无法分配新的短固件工作目录")
+	return "", errors.New("cannot allocate short firmware work dir")
 }
 
 func unrecognizedPackageSummary(zipPath string, extractedRoot string) string {
@@ -377,7 +479,7 @@ func unrecognizedPackageSummary(zipPath string, extractedRoot string) string {
 }
 
 func summarizeZipEntries(zipPath string, limit int) string {
-	reader, err := zip.OpenReader(zipPath)
+	reader, err := zip.OpenReader(windowsFilesystemPath(zipPath))
 	if err != nil {
 		return "cannot reopen zip: " + err.Error()
 	}
@@ -404,7 +506,7 @@ func summarizeZipEntries(zipPath string, limit int) string {
 }
 
 func summarizeDirEntries(root string, limit int) string {
-	entries, err := os.ReadDir(root)
+	entries, err := os.ReadDir(windowsFilesystemPath(root))
 	if err != nil {
 		return "cannot read extracted root: " + err.Error()
 	}
@@ -426,6 +528,23 @@ func summarizeDirEntries(root string, limit int) string {
 		return "empty extracted root"
 	}
 	return strings.Join(names, ", ")
+}
+
+func windowsFilesystemPath(path string) string {
+	if goruntime.GOOS != "windows" || path == "" {
+		return path
+	}
+	clean := filepath.Clean(path)
+	if strings.HasPrefix(clean, `\\?\`) {
+		return clean
+	}
+	if strings.HasPrefix(clean, `\\`) {
+		return `\\?\UNC\` + strings.TrimPrefix(clean, `\\`)
+	}
+	if filepath.VolumeName(clean) != "" {
+		return `\\?\` + clean
+	}
+	return path
 }
 
 func isInside(root string, target string) bool {

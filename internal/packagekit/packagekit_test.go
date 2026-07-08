@@ -80,6 +80,34 @@ func TestAnalyzeZipWithSourceOnlyProject(t *testing.T) {
 	}
 }
 
+func TestZipSingleRootPrefixStripsNestedArchiveRoots(t *testing.T) {
+	zipPath := makeZip(t, map[string]string{
+		"archive/SKYLOONG-main/CMakeLists.txt":           "idf_component_register()",
+		"archive/SKYLOONG-main/main/main.cpp":            "void app_main(){}",
+		"archive/SKYLOONG-main/tools/web_new/index.html": "<html></html>",
+	})
+	reader, err := zip.OpenReader(zipPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+
+	prefix := zipSingleRootPrefix(reader.File)
+	if got, want := strings.Join(prefix, "/"), "archive/SKYLOONG-main"; got != want {
+		t.Fatalf("prefix = %q, want %q", got, want)
+	}
+	name, skip, err := stripZipRootPrefix("archive/SKYLOONG-main/CMakeLists.txt", prefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if skip {
+		t.Fatalf("CMakeLists.txt should not be skipped")
+	}
+	if name != "CMakeLists.txt" {
+		t.Fatalf("stripped name = %q", name)
+	}
+}
+
 func TestAnalyzeZipFindsNestedSourceProject(t *testing.T) {
 	workspace := t.TempDir()
 	zipPath := makeZip(t, map[string]string{
@@ -159,7 +187,7 @@ func TestAnalyzeZipMissingFileHasFriendlyMessage(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected missing zip error")
 	}
-	if !strings.Contains(err.Error(), "找不到固件 zip 文件") {
+	if !strings.Contains(err.Error(), "firmware zip not found") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

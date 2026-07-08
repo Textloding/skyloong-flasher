@@ -168,7 +168,7 @@ Windows 下 ESP-IDF 组件有些测试文件路径非常深，默认组件缓存
 
 如果遇到 `espressif/esp-serial-flasher` 这类组件包内自带的 `test/target-example-src/**/build-*` 超长路径，工具会通过内置 Python 补丁给 `open`、`io.open`、`os.makedirs`、`os.stat` 等文件操作加上 Windows 长路径前缀。旧版本如果留下过缺文件的损坏缓存，新版会按 `CHECKSUMS.json` 检测并删除该组件缓存，让 ESP-IDF 重新完整下载和解压。
 
-新版还会把源码包解压到 `C:\P\<短ID>`，并自动扁平化 zip 里常见的单根目录，例如 `SKYLOONG-main`。这样 ESP-IDF 把组件复制到项目 `managed_components` 时，目标路径也不会因为 `%LOCALAPPDATA%` 太长而失败。特殊环境下可设置 `SKYLOONG_PACKAGE_WORKSPACE_PATH` 指向一个更短且可写的目录。
+新版还会把源码包解压到 `C:\P\<短ID>`，并在解压写入时直接剥离 zip 里常见的公共根目录，例如 `SKYLOONG-main`。工具不会再先完整解压再移动目录，因此遇到 `tools/web`、`web_new` 这类深层目录时也不会把源码根目录搬到一半；同时 Go 侧文件打开、创建、读取会使用 Windows 长路径前缀。特殊环境下可设置 `SKYLOONG_PACKAGE_WORKSPACE_PATH` 指向一个更短且可写的目录。
 
 如果旧版本已经失败过，直接用新版重新点击“准备环境并构建”即可。特殊环境下也可以在启动前设置 `SKYLOONG_COMPONENT_CACHE_PATH` 指向一个更短且可写的目录，例如 `D:\SLCM`。
 
