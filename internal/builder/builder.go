@@ -109,7 +109,7 @@ func (s *buildLogState) Observe(line string) {
 	}
 	if s.sawFileNotFound && s.sawComponentCachePath {
 		s.failed = true
-		s.reason = "ESP-IDF 组件缓存路径过长或缓存文件损坏，工具已改为使用更短的组件缓存目录，请重新构建一次"
+		s.reason = "ESP-IDF 组件缓存路径过长或缓存文件损坏，工具会跳过组件包内无用的测试构建缓存并使用短组件缓存目录，请重新构建一次"
 		return
 	}
 

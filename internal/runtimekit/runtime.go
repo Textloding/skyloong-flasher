@@ -31,7 +31,30 @@ const (
 
 	componentCacheOverrideEnv = "SKYLOONG_COMPONENT_CACHE_PATH"
 	componentCacheDirName     = "SLCM"
+	pythonPatchDirName        = "_python_patch"
+	siteCustomizeName         = "sitecustomize.py"
 )
+
+const siteCustomizeZipPatch = `import os
+import zipfile
+
+_ORIGINAL_EXTRACT_MEMBER = getattr(zipfile.ZipFile, "_extract_member", None)
+
+def _skyloong_should_skip_member(member_name):
+    name = str(member_name).replace("\\", "/")
+    probe = "/" + name
+    return "/test/target-example-src/" in probe and "/build-" in probe
+
+def _skyloong_extract_member(self, member, targetpath, pwd):
+    name = member.filename if hasattr(member, "filename") else str(member)
+    if _skyloong_should_skip_member(name):
+        return os.path.join(targetpath, name)
+    return _ORIGINAL_EXTRACT_MEMBER(self, member, targetpath, pwd)
+
+if _ORIGINAL_EXTRACT_MEMBER is not None and not getattr(zipfile.ZipFile, "_skyloong_patch_installed", False):
+    zipfile.ZipFile._extract_member = _skyloong_extract_member
+    zipfile.ZipFile._skyloong_patch_installed = True
+`
 
 type Status struct {
 	Available          bool   `json:"available"`
@@ -239,6 +262,14 @@ func PrepareComponentCacheDir(cacheDir string) (string, error) {
 			lastErr = fmt.Errorf("%s: %w", dir, err)
 			continue
 		}
+		if err := preparePythonZipPatch(dir); err != nil {
+			lastErr = fmt.Errorf("%s: %w", dir, err)
+			continue
+		}
+		if err := sanitizeSerialFlasherBuildDirs(dir); err != nil {
+			lastErr = fmt.Errorf("%s: %w", dir, err)
+			continue
+		}
 		return dir, nil
 	}
 	if lastErr != nil {
@@ -302,6 +333,49 @@ func appendUniquePath(paths []string, path string) []string {
 		}
 	}
 	return append(paths, clean)
+}
+
+func pythonPatchPath(componentCachePath string) string {
+	if componentCachePath == "" {
+		return ""
+	}
+	return filepath.Join(componentCachePath, pythonPatchDirName)
+}
+
+func preparePythonZipPatch(componentCachePath string) error {
+	patchDir := pythonPatchPath(componentCachePath)
+	if patchDir == "" {
+		return nil
+	}
+	if err := os.MkdirAll(patchDir, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(patchDir, siteCustomizeName), []byte(siteCustomizeZipPatch), 0o644)
+}
+
+func sanitizeSerialFlasherBuildDirs(componentCachePath string) error {
+	if componentCachePath == "" {
+		return nil
+	}
+	pattern := filepath.Join(
+		componentCachePath,
+		"service_*",
+		"espressif__esp-serial-flasher_*",
+		"test",
+		"target-example-src",
+		"*",
+		"build-*",
+	)
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return err
+	}
+	for _, dir := range matches {
+		if err := os.RemoveAll(dir); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func findGit(cacheDir string) (string, bool) {
@@ -711,7 +785,11 @@ func runtimeEnv(base []string, componentCachePath string, toolPaths ...string) [
 	if componentCachePath != "" {
 		values["IDF_COMPONENT_CACHE_PATH"] = componentCachePath
 	}
-	return prependPath(upsertEnv(base, values), gitEnvDirs(toolPaths...)...)
+	env := upsertEnv(base, values)
+	if patchPath := pythonPatchPath(componentCachePath); patchPath != "" {
+		env = prependEnvPath(env, "PYTHONPATH", patchPath)
+	}
+	return prependPath(env, gitEnvDirs(toolPaths...)...)
 }
 
 func upsertEnv(base []string, values map[string]string) []string {
@@ -736,6 +814,10 @@ func upsertEnv(base []string, values map[string]string) []string {
 }
 
 func prependPath(base []string, dirs ...string) []string {
+	return prependEnvPath(base, "PATH", dirs...)
+}
+
+func prependEnvPath(base []string, envKey string, dirs ...string) []string {
 	cleanDirs := make([]string, 0, len(dirs))
 	seenDir := map[string]bool{}
 	for _, dir := range dirs {
@@ -758,7 +840,7 @@ func prependPath(base []string, dirs ...string) []string {
 	prefix := strings.Join(cleanDirs, string(os.PathListSeparator))
 	for i, item := range out {
 		key, value, ok := strings.Cut(item, "=")
-		if ok && strings.EqualFold(key, "PATH") {
+		if ok && strings.EqualFold(key, envKey) {
 			if value != "" {
 				out[i] = key + "=" + prefix + string(os.PathListSeparator) + value
 			} else {
@@ -767,7 +849,7 @@ func prependPath(base []string, dirs ...string) []string {
 			return out
 		}
 	}
-	return append(out, "PATH="+prefix)
+	return append(out, envKey+"="+prefix)
 }
 
 func gitEnvDirs(paths ...string) []string {
