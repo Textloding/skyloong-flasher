@@ -34,7 +34,7 @@ declare global {
   }
 }
 
-const steps = ["选择固件", "解析包", "检查环境", "连接屏幕", "刷机"];
+const steps = ["选择固件", "准备固件", "连接屏幕", "刷机"];
 
 async function call<T>(name: string, ...args: any[]): Promise<T> {
   const fn = window.go?.main?.App?.[name];
@@ -60,7 +60,7 @@ function App() {
 
   useEffect(() => {
     void refreshRuntime();
-    void scanDevices();
+    void scanDevices(false);
     const offLog = window.runtime?.EventsOn?.("flash:log", (payload) => {
       setLogs((items) => [...items.slice(-160), payload.line]);
     });
@@ -87,11 +87,10 @@ function App() {
 
   const activeStep = useMemo(() => {
     if (!analysis) return 0;
-    if (analysis.needsBuild) return 2;
-    if (!runtime?.available) return 2;
-    if (!selectedPort) return 3;
-    return 4;
-  }, [analysis, runtime, selectedPort]);
+    if (analysis.needsBuild || !analysis.canFlash) return 1;
+    if (!selectedPort) return 2;
+    return 3;
+  }, [analysis, selectedPort]);
 
   const bestDevice = devices.find((d) => d.canFlash) ?? devices[0];
   const flashButtonText = busy ? "任务执行中..." : analysis?.needsBuild ? "请先构建固件" : "开始刷机";
@@ -103,13 +102,17 @@ function App() {
     setTaskProgress({ stage: "检查环境", percent: 100, message: next.message || "环境检查完成。" });
   }
 
-  async function scanDevices() {
-    setTaskProgress({ stage: "扫描设备", percent: 20, message: "正在扫描 USB 和串口设备。" });
+  async function scanDevices(showProgress = true) {
+    if (showProgress) {
+      setTaskProgress({ stage: "扫描设备", percent: 20, message: "正在扫描 USB 和串口设备。" });
+    }
     const next = await call<Device[]>("ScanDevices");
     setDevices(next);
     const flashDevice = next.find((d) => d.canFlash && d.port);
     if (flashDevice) setSelectedPort(flashDevice.port);
-    setTaskProgress({ stage: "扫描设备", percent: 100, message: `扫描完成，发现 ${next.length} 个候选设备。` });
+    if (showProgress) {
+      setTaskProgress({ stage: "扫描设备", percent: 100, message: `扫描完成，发现 ${next.length} 个候选设备。` });
+    }
   }
 
   async function chooseZip() {
@@ -256,7 +259,7 @@ function App() {
           <div className="section-title">
             <span>02</span>
             <div>
-              <h2>固件状态</h2>
+              <h2>准备固件</h2>
               <p>{analysis ? analysis.projectName : "等待解析固件包。"}</p>
             </div>
           </div>
@@ -265,7 +268,7 @@ function App() {
               ["类型", analysis?.kind ?? "未选择"],
               ["芯片", analysis?.chip ?? "esp32s3"],
               ["刷机文件", analysis ? `${analysis.flashFiles?.length ?? 0} 个` : "0 个"],
-              ["构建状态", analysis?.needsBuild ? "需要构建" : analysis?.canFlash ? "可直接刷" : "等待"],
+              ["当前步骤", analysis?.needsBuild ? "准备环境并构建" : analysis?.canFlash ? "等待连接屏幕" : "等待解析"],
             ]}
           />
           {analysis?.needsBuild && (
@@ -299,7 +302,7 @@ function App() {
               <p>如果只看到键盘运行态，请按住 BOOT/下载键再重新插入或重试扫描。</p>
             </div>
           </div>
-          <button className="secondary full" onClick={scanDevices}>重新扫描设备</button>
+          <button className="secondary full" onClick={() => scanDevices(true)}>重新扫描设备</button>
           <div className="device-list">
             {devices.length === 0 && <div className="empty">还没有检测到可用设备。</div>}
             {devices.map((device) => (

@@ -264,6 +264,9 @@ h1 {
 
 .device-card {
   grid-area: device;
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
 }
 
 .flash-card {
@@ -443,6 +446,30 @@ input:focus {
   gap: 8px;
 }
 
+.device-list {
+  max-height: clamp(260px, 38dvh, 420px);
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+  scrollbar-color: rgba(139, 216, 188, 0.56) rgba(255, 255, 255, 0.06);
+  scrollbar-width: thin;
+}
+
+.device-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.device-list::-webkit-scrollbar-track {
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.device-list::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(139, 216, 188, 0.56);
+}
+
 .file-list div {
   display: grid;
   grid-template-columns: 76px 1fr auto;
@@ -546,6 +573,10 @@ pre {
 
   .progress-panel {
     grid-template-columns: 1fr;
+  }
+
+  .device-list {
+    max-height: 320px;
   }
 
   h1 {
