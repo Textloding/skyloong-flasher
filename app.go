@@ -27,17 +27,19 @@ const compatibilityDetectionTimeout = 50 * time.Second
 type probeDeviceFunc func(context.Context, runtimekit.Status, string, int, func(string)) preflight.DeviceProbe
 
 type App struct {
-	ctx             context.Context
-	mu              sync.Mutex
-	current         *packagekit.Analysis
-	probeDevice     probeDeviceFunc
-	preflightMu     sync.Mutex
-	preflightCancel context.CancelFunc
-	preflightToken  uint64
-	cacheDir        string
-	logMu           sync.Mutex
-	logHistory      []string
-	logFile         string
+	ctx                  context.Context
+	mu                   sync.Mutex
+	current              *packagekit.Analysis
+	probeDevice          probeDeviceFunc
+	preflightLifecycleMu sync.Mutex
+	preflightMu          sync.Mutex
+	preflightCancel      context.CancelFunc
+	preflightDone        chan struct{}
+	preflightToken       uint64
+	cacheDir             string
+	logMu                sync.Mutex
+	logHistory           []string
+	logFile              string
 }
 
 type AnalyzeResponse struct {
@@ -159,8 +161,8 @@ func (a *App) CheckRuntime() runtimekit.Status {
 }
 
 func (a *App) DetectCompatibility(req CompatibilityRequest) (*preflight.Report, error) {
-	ctx, cancel, token := a.beginCompatibilityDetection()
-	defer a.finishCompatibilityDetection(cancel, token)
+	ctx, cancel, done, token := a.beginCompatibilityDetection()
+	defer a.finishCompatibilityDetection(cancel, done, token)
 
 	a.mu.Lock()
 	analysis := a.current
@@ -202,43 +204,54 @@ func (a *App) DetectCompatibility(req CompatibilityRequest) (*preflight.Report, 
 }
 
 func (a *App) CancelCompatibilityDetection() {
+	a.preflightLifecycleMu.Lock()
+	defer a.preflightLifecycleMu.Unlock()
+	a.cancelCompatibilityDetectionAndWait()
+}
+
+func (a *App) cancelCompatibilityDetectionAndWait() {
 	a.preflightMu.Lock()
 	cancel := a.preflightCancel
-	if cancel != nil {
-		a.preflightCancel = nil
-		a.preflightToken++
-	}
+	done := a.preflightDone
 	a.preflightMu.Unlock()
 
 	if cancel != nil {
 		cancel()
 	}
+	if done != nil {
+		<-done
+	}
 }
 
-func (a *App) beginCompatibilityDetection() (context.Context, context.CancelFunc, uint64) {
+func (a *App) beginCompatibilityDetection() (context.Context, context.CancelFunc, chan struct{}, uint64) {
+	a.preflightLifecycleMu.Lock()
+	defer a.preflightLifecycleMu.Unlock()
+	a.cancelCompatibilityDetectionAndWait()
+
 	baseContext := a.ctx
 	if baseContext == nil {
 		baseContext = context.Background()
 	}
 	ctx, cancel := context.WithTimeout(baseContext, compatibilityDetectionTimeout)
+	done := make(chan struct{})
 
 	a.preflightMu.Lock()
-	if a.preflightCancel != nil {
-		a.preflightCancel()
-	}
 	a.preflightToken++
 	token := a.preflightToken
 	a.preflightCancel = cancel
+	a.preflightDone = done
 	a.preflightMu.Unlock()
 
-	return ctx, cancel, token
+	return ctx, cancel, done, token
 }
 
-func (a *App) finishCompatibilityDetection(cancel context.CancelFunc, token uint64) {
+func (a *App) finishCompatibilityDetection(cancel context.CancelFunc, done chan struct{}, token uint64) {
 	cancel()
+	close(done)
 	a.preflightMu.Lock()
 	if a.preflightToken == token {
 		a.preflightCancel = nil
+		a.preflightDone = nil
 	}
 	a.preflightMu.Unlock()
 }

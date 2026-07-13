@@ -157,6 +157,7 @@ func TestDetectCompatibilityCancelsPreviousDetectionWithoutStaleCleanupCanceling
 	firstStarted := make(chan struct{})
 	firstCanceled := make(chan struct{})
 	allowFirstReturn := make(chan struct{})
+	firstProbeReturned := make(chan struct{})
 	secondStarted := make(chan struct{})
 	secondCanceled := make(chan struct{})
 	app.probeDevice = func(ctx context.Context, _ runtimekit.Status, port string, _ int, _ func(string)) preflight.DeviceProbe {
@@ -166,6 +167,7 @@ func TestDetectCompatibilityCancelsPreviousDetectionWithoutStaleCleanupCanceling
 			<-ctx.Done()
 			close(firstCanceled)
 			<-allowFirstReturn
+			close(firstProbeReturned)
 		case "COM2":
 			close(secondStarted)
 			<-ctx.Done()
@@ -187,10 +189,12 @@ func TestDetectCompatibilityCancelsPreviousDetectionWithoutStaleCleanupCanceling
 		_, _ = app.DetectCompatibility(CompatibilityRequest{Port: "COM2", Baud: 460800})
 	}()
 	waitForTestSignal(t, firstCanceled, "second detection to cancel the first")
-	waitForTestSignal(t, secondStarted, "second detection to start")
+	assertTestSignalBlocked(t, secondStarted, "second detection while the first probe has not returned")
 
 	close(allowFirstReturn)
+	waitForTestSignal(t, firstProbeReturned, "first probe to return")
 	waitForTestSignal(t, firstDone, "first detection to return")
+	waitForTestSignal(t, secondStarted, "second detection to start after the first returned")
 	select {
 	case <-secondCanceled:
 		t.Fatal("first detection cleanup canceled the active second detection")
@@ -210,10 +214,14 @@ func TestCancelCompatibilityDetectionIsIdempotent(t *testing.T) {
 	app.current = &packagekit.Analysis{ProjectName: "firmware", CanFlash: true}
 	started := make(chan struct{})
 	canceled := make(chan struct{})
+	allowProbeReturn := make(chan struct{})
+	probeReturned := make(chan struct{})
 	app.probeDevice = func(ctx context.Context, _ runtimekit.Status, _ string, _ int, _ func(string)) preflight.DeviceProbe {
 		close(started)
 		<-ctx.Done()
 		close(canceled)
+		<-allowProbeReturn
+		close(probeReturned)
 		return preflight.DeviceProbe{}
 	}
 
@@ -224,10 +232,18 @@ func TestCancelCompatibilityDetectionIsIdempotent(t *testing.T) {
 	}()
 	waitForTestSignal(t, started, "detection to start")
 
-	app.CancelCompatibilityDetection()
-	app.CancelCompatibilityDetection()
+	cancelDone := make(chan struct{})
+	go func() {
+		defer close(cancelDone)
+		app.CancelCompatibilityDetection()
+	}()
 	waitForTestSignal(t, canceled, "detection cancellation")
+	assertTestSignalBlocked(t, cancelDone, "CancelCompatibilityDetection while the probe has not returned")
+	close(allowProbeReturn)
+	waitForTestSignal(t, probeReturned, "probe to return")
+	waitForTestSignal(t, cancelDone, "CancelCompatibilityDetection to return")
 	waitForTestSignal(t, done, "detection to return")
+	app.CancelCompatibilityDetection()
 	app.CancelCompatibilityDetection()
 }
 
@@ -239,10 +255,14 @@ func TestStartFlashCancelsCompatibilityDetectionBeforeEarlyReturn(t *testing.T) 
 	app.current = &packagekit.Analysis{ProjectName: "firmware", CanFlash: true}
 	started := make(chan struct{})
 	canceled := make(chan struct{})
+	allowProbeReturn := make(chan struct{})
+	probeReturned := make(chan struct{})
 	app.probeDevice = func(ctx context.Context, _ runtimekit.Status, _ string, _ int, _ func(string)) preflight.DeviceProbe {
 		close(started)
 		<-ctx.Done()
 		close(canceled)
+		<-allowProbeReturn
+		close(probeReturned)
 		return preflight.DeviceProbe{}
 	}
 
@@ -256,11 +276,23 @@ func TestStartFlashCancelsCompatibilityDetectionBeforeEarlyReturn(t *testing.T) 
 	app.mu.Lock()
 	app.current = nil
 	app.mu.Unlock()
-	if err := app.StartFlash(FlashRequest{Port: "COM7", Baud: 460800}); err == nil {
-		t.Fatal("StartFlash() error = nil, want missing analysis error")
-	}
+	flashDone := make(chan error, 1)
+	go func() {
+		flashDone <- app.StartFlash(FlashRequest{Port: "COM7", Baud: 460800})
+	}()
 	waitForTestSignal(t, canceled, "StartFlash to cancel detection")
+	assertTestErrorBlocked(t, flashDone, "StartFlash while the probe has not returned")
+	close(allowProbeReturn)
+	waitForTestSignal(t, probeReturned, "probe to return")
 	waitForTestSignal(t, done, "detection to return")
+	select {
+	case err := <-flashDone:
+		if err == nil {
+			t.Fatal("StartFlash() error = nil, want missing analysis error")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for StartFlash to return after the probe exited")
+	}
 }
 
 func TestMergeBuildAnalysisMetadataFillsEveryMissingField(t *testing.T) {
@@ -461,6 +493,24 @@ func waitForTestSignal(t *testing.T, signal <-chan struct{}, description string)
 	case <-signal:
 	case <-time.After(2 * time.Second):
 		t.Fatalf("timed out waiting for %s", description)
+	}
+}
+
+func assertTestSignalBlocked(t *testing.T, signal <-chan struct{}, description string) {
+	t.Helper()
+	select {
+	case <-signal:
+		t.Fatalf("unexpected completion of %s", description)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func assertTestErrorBlocked(t *testing.T, signal <-chan error, description string) {
+	t.Helper()
+	select {
+	case err := <-signal:
+		t.Fatalf("unexpected completion of %s: %v", description, err)
+	case <-time.After(100 * time.Millisecond):
 	}
 }
 
