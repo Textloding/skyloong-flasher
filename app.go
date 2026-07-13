@@ -15,20 +15,26 @@ import (
 	"github.com/Textloding/skyloong-flasher/internal/flasher"
 	"github.com/Textloding/skyloong-flasher/internal/githubsource"
 	"github.com/Textloding/skyloong-flasher/internal/packagekit"
+	"github.com/Textloding/skyloong-flasher/internal/preflight"
 	"github.com/Textloding/skyloong-flasher/internal/runtimekit"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 const packageWorkspaceOverrideEnv = "SKYLOONG_PACKAGE_WORKSPACE_PATH"
 
+const compatibilityDetectionTimeout = 50 * time.Second
+
+type probeDeviceFunc func(context.Context, runtimekit.Status, string, int, func(string)) preflight.DeviceProbe
+
 type App struct {
-	ctx        context.Context
-	mu         sync.Mutex
-	current    *packagekit.Analysis
-	cacheDir   string
-	logMu      sync.Mutex
-	logHistory []string
-	logFile    string
+	ctx         context.Context
+	mu          sync.Mutex
+	current     *packagekit.Analysis
+	probeDevice probeDeviceFunc
+	cacheDir    string
+	logMu       sync.Mutex
+	logHistory  []string
+	logFile     string
 }
 
 type AnalyzeResponse struct {
@@ -46,8 +52,13 @@ type FlashRequest struct {
 	Baud int    `json:"baud"`
 }
 
+type CompatibilityRequest struct {
+	Port string `json:"port"`
+	Baud int    `json:"baud"`
+}
+
 func NewApp() *App {
-	return &App{}
+	return &App{probeDevice: preflight.ProbeDevice}
 }
 
 func (a *App) startup(ctx context.Context) {
@@ -144,6 +155,53 @@ func (a *App) CheckRuntime() runtimekit.Status {
 	return runtimekit.DetectIn(a.cacheDir)
 }
 
+func (a *App) DetectCompatibility(req CompatibilityRequest) (*preflight.Report, error) {
+	a.mu.Lock()
+	analysis := a.current
+	a.mu.Unlock()
+	if analysis == nil {
+		return nil, fmt.Errorf("无法检测兼容性：请先选择并解析固件包")
+	}
+	req.Port = strings.TrimSpace(req.Port)
+	if req.Port == "" {
+		return nil, fmt.Errorf("无法检测兼容性：请选择设备串口")
+	}
+
+	baseContext := a.ctx
+	if baseContext == nil {
+		baseContext = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(baseContext, compatibilityDetectionTimeout)
+	defer cancel()
+
+	a.logLine(fmt.Sprintf("开始兼容性检测：端口=%s，波特率=%d", req.Port, req.Baud))
+	a.progress("兼容性检测", 5, "正在检查设备探测运行时")
+	status := runtimekit.DetectIn(a.cacheDir)
+	if !status.Available {
+		var err error
+		status, err = a.ensureRuntimeWithContext(ctx)
+		if err != nil {
+			a.logLine("兼容性检测运行时准备失败：" + err.Error())
+			return nil, friendlyError("兼容性检测运行时准备失败", err)
+		}
+	}
+
+	a.progress("兼容性检测", 20, "正在检查固件要求")
+	firmware := preflight.InspectFirmware(analysis)
+	a.progress("兼容性检测", 40, "正在读取设备信息")
+	probeDevice := a.probeDevice
+	if probeDevice == nil {
+		probeDevice = preflight.ProbeDevice
+	}
+	deviceProbe := probeDevice(ctx, status, req.Port, req.Baud, a.logLine)
+	a.progress("兼容性检测", 90, "正在比较固件与设备")
+	report := preflight.Compare(firmware, deviceProbe)
+	a.logLine("兼容性检测结果：overall=" + report.Overall)
+	a.progress("兼容性检测", 100, "兼容性检测完成")
+	a.logLine("兼容性检测结束")
+	return &report, nil
+}
+
 func (a *App) BuildSourcePackage() (*AnalyzeResponse, error) {
 	if err := a.prepareCacheDirs(); err != nil {
 		return nil, friendlyError("缓存文件夹准备失败", err)
@@ -183,6 +241,7 @@ func (a *App) BuildSourcePackage() (*AnalyzeResponse, error) {
 		a.logLine("构建产物解析失败：" + err.Error())
 		return nil, friendlyError("构建产物解析失败", err)
 	}
+	mergeBuildAnalysisMetadata(built, analysis)
 	a.logLine("源码构建完成，刷机产物已准备好")
 	a.progress("构建固件", 100, "构建产物已准备好，可以刷机")
 	return a.withState(built)
@@ -239,16 +298,48 @@ func (a *App) withState(analysis *packagekit.Analysis) (*AnalyzeResponse, error)
 }
 
 func (a *App) ensureRuntime() (runtimekit.Status, error) {
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return a.ensureRuntimeWithContext(ctx)
+}
+
+func (a *App) ensureRuntimeWithContext(ctx context.Context) (runtimekit.Status, error) {
 	if err := a.prepareCacheDirs(); err != nil {
 		return runtimekit.Status{}, err
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	a.logLine("开始准备构建/刷机运行时")
 	a.logLine("工具会自动准备：便携 Git、EIM CLI、ESP-IDF、Python、CMake、Ninja、交叉编译器、esptool 和组件依赖")
-	return runtimekit.Ensure(a.ctx, a.cacheDir, func(stage string, percent int, message string) {
+	return runtimekit.Ensure(ctx, a.cacheDir, func(stage string, percent int, message string) {
 		a.progress(stage, percent, message)
 	}, func(line string) {
 		a.logLine(line)
 	})
+}
+
+func mergeBuildAnalysisMetadata(built, source *packagekit.Analysis) {
+	if built == nil || source == nil {
+		return
+	}
+	if strings.TrimSpace(built.HardwareVersion) == "" {
+		built.HardwareVersion = source.HardwareVersion
+	}
+	if strings.TrimSpace(built.Display) == "" {
+		built.Display = source.Display
+	}
+	if built.MinimumFlashBytes == 0 {
+		built.MinimumFlashBytes = source.MinimumFlashBytes
+	}
+	if built.MinimumPSRAMBytes == 0 {
+		built.MinimumPSRAMBytes = source.MinimumPSRAMBytes
+	}
+	if strings.TrimSpace(built.PSRAMMode) == "" {
+		built.PSRAMMode = source.PSRAMMode
+	}
 }
 
 func (a *App) GetLogHistory() []string {
