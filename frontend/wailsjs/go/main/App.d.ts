@@ -9,6 +9,8 @@ export function AnalyzeLocalZip(arg1:string):Promise<main.AnalyzeResponse>;
 
 export function BuildSourcePackage():Promise<main.AnalyzeResponse>;
 
+export function CancelCompatibilityDetection():Promise<void>;
+
 export function CheckRuntime():Promise<runtimekit.Status>;
 
 export function DetectCompatibility(arg1:main.CompatibilityRequest):Promise<preflight.Report>;

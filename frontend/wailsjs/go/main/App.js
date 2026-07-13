@@ -10,6 +10,10 @@ export function BuildSourcePackage() {
   return window['go']['main']['App']['BuildSourcePackage']();
 }
 
+export function CancelCompatibilityDetection() {
+  return window['go']['main']['App']['CancelCompatibilityDetection']();
+}
+
 export function CheckRuntime() {
   return window['go']['main']['App']['CheckRuntime']();
 }
