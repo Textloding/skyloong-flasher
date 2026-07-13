@@ -830,18 +830,24 @@ pre::-webkit-scrollbar-thumb {
     padding: 16px;
   }
 
-  .hero-panel,
-  .workspace {
-    grid-template-columns: 1fr;
+  .hero-panel {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .workspace {
+    width: 100%;
+    min-width: 0;
+    grid-template-columns: minmax(0, 1fr);
     grid-template-areas:
       "source"
       "info"
       "device"
       "compatibility"
       "flash";
+  }
+
+  .workspace > * {
+    min-width: 0;
   }
 
   .compatibility-heading {
@@ -859,6 +865,10 @@ pre::-webkit-scrollbar-thumb {
 
   .compatibility-facts {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .input-row {
+    grid-template-columns: minmax(0, 1fr) auto;
   }
 
   .steps {
