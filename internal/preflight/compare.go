@@ -72,7 +72,7 @@ func appendSecurityChecks(checks *[]CheckResult, device DeviceCapabilities) {
 			Title:   "安全启动未启用",
 			Summary: "设备未启用 Secure Boot",
 		})
-	case TriStateUnknown:
+	default:
 		*checks = append(*checks, CheckResult{
 			Code:    "secure_boot_unknown",
 			Status:  StatusUnknown,
@@ -96,7 +96,7 @@ func appendSecurityChecks(checks *[]CheckResult, device DeviceCapabilities) {
 			Title:   "Flash 加密未启用",
 			Summary: "设备未启用 Flash Encryption",
 		})
-	case TriStateUnknown:
+	default:
 		*checks = append(*checks, CheckResult{
 			Code:    "flash_encryption_unknown",
 			Status:  StatusUnknown,

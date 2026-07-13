@@ -262,6 +262,20 @@ func TestCompareReportsSecurityStates(t *testing.T) {
 	}
 }
 
+func TestCompareTreatsZeroValueSecurityStatesAsUnknown(t *testing.T) {
+	report := Compare(FirmwareInspection{}, DeviceProbe{Capabilities: DeviceCapabilities{}})
+
+	for _, code := range []string{"secure_boot_unknown", "flash_encryption_unknown"} {
+		check, ok := findCheck(report.Checks, code)
+		if !ok || check.Status != StatusUnknown {
+			t.Errorf("checks = %#v, want %s unknown", report.Checks, code)
+		}
+	}
+	if report.Overall != "unknown" {
+		t.Errorf("Overall = %q, want unknown", report.Overall)
+	}
+}
+
 func TestCompareReportsHardwareVersionUnknownForGenericUSBProbe(t *testing.T) {
 	report := Compare(
 		FirmwareInspection{Requirements: FirmwareRequirements{HardwareVersion: "V4.0"}},
@@ -320,7 +334,10 @@ func TestCompareOverallPriority(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			report := Compare(FirmwareInspection{Checks: tt.checks}, DeviceProbe{})
+			report := Compare(FirmwareInspection{Checks: tt.checks}, DeviceProbe{Capabilities: DeviceCapabilities{
+				SecureBoot:      TriStateDisabled,
+				FlashEncryption: TriStateDisabled,
+			}})
 			if report.Overall != tt.overall {
 				t.Errorf("Overall = %q, want %q", report.Overall, tt.overall)
 			}
