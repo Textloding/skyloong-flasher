@@ -4,12 +4,57 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/Textloding/skyloong-flasher/internal/packagekit"
 )
+
+func TestWindowsFilesystemPathNormalization(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		path := "/tmp/firmware/partition-table.bin"
+		if got := windowsFilesystemPath(path); got != path {
+			t.Fatalf("windowsFilesystemPath(%q) = %q, want unchanged path", path, got)
+		}
+		return
+	}
+
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{
+			name: "drive path",
+			path: `C:\firmware\partition-table.bin`,
+			want: `\\?\C:\firmware\partition-table.bin`,
+		},
+		{
+			name: "UNC path",
+			path: `\\server\share\partition-table.bin`,
+			want: `\\?\UNC\server\share\partition-table.bin`,
+		},
+		{
+			name: "already extended",
+			path: `\\?\C:\firmware\partition-table.bin`,
+			want: `\\?\C:\firmware\partition-table.bin`,
+		},
+		{
+			name: "relative path",
+			path: `firmware\partition-table.bin`,
+			want: `firmware\partition-table.bin`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := windowsFilesystemPath(test.path); got != test.want {
+				t.Fatalf("windowsFilesystemPath(%q) = %q, want %q", test.path, got, test.want)
+			}
+		})
+	}
+}
 
 func completeFirmwareAnalysis(t *testing.T) *packagekit.Analysis {
 	t.Helper()
@@ -120,6 +165,27 @@ func TestInspectFirmwareReportsOverlappingWriteRegions(t *testing.T) {
 	check, ok := findCheck(inspection.Checks, "flash_region_overlap")
 	if !ok || check.Status != StatusWarning {
 		t.Fatalf("checks = %#v, want flash_region_overlap warning", inspection.Checks)
+	}
+}
+
+func TestCheckFlashRegionOverlapReportsAddressOverflow(t *testing.T) {
+	inspection := FirmwareInspection{
+		Requirements: FirmwareRequirements{
+			FlashFiles: []FlashRegion{
+				{Offset: ^uint64(0) - 0xF, Size: 0x20, Path: "overflow.bin"},
+				{Offset: 0x10, Size: 0x10, Path: "low-address.bin"},
+			},
+		},
+	}
+
+	checkFlashRegionOverlap(&inspection)
+
+	check, ok := findCheck(inspection.Checks, "flash_region_overflow")
+	if !ok || check.Status != StatusWarning {
+		t.Fatalf("checks = %#v, want flash_region_overflow warning", inspection.Checks)
+	}
+	if _, ok := findCheck(inspection.Checks, "flash_region_layout"); ok {
+		t.Fatalf("checks = %#v, overflow must not produce layout pass", inspection.Checks)
 	}
 }
 

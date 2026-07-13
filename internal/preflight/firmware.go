@@ -3,6 +3,8 @@ package preflight
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	goruntime "runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -112,7 +114,7 @@ func inspectPartitionTable(inspection *FirmwareInspection, table packagekit.Flas
 		})
 		return nil, false
 	}
-	raw, err := os.ReadFile(table.Path)
+	raw, err := os.ReadFile(windowsFilesystemPath(table.Path))
 	if err != nil {
 		inspection.Checks = append(inspection.Checks, CheckResult{
 			Code:      "partition_table",
@@ -193,10 +195,23 @@ func checkFlashRegionOverlap(inspection *FirmwareInspection) {
 	regions := append([]FlashRegion(nil), inspection.Requirements.FlashFiles...)
 	sort.SliceStable(regions, func(i, j int) bool { return regions[i].Offset < regions[j].Offset })
 	found := false
+	for _, region := range regions {
+		if _, overflow := saturatedRegionEnd(region); !overflow {
+			continue
+		}
+		found = true
+		inspection.Checks = append(inspection.Checks, CheckResult{
+			Code:      "flash_region_overflow",
+			Status:    StatusWarning,
+			Title:     "固件写入地址超出范围",
+			Summary:   "固件文件的写入结束地址超过可表示的 Flash 地址范围",
+			Technical: fmt.Sprintf("%s offset=%#x size=%#x", region.Path, region.Offset, region.Size),
+		})
+	}
 	for index := 1; index < len(regions); index++ {
 		previous := regions[index-1]
 		current := regions[index]
-		previousEnd := previous.Offset + previous.Size
+		previousEnd, _ := saturatedRegionEnd(previous)
 		if current.Offset >= previousEnd {
 			continue
 		}
@@ -217,6 +232,14 @@ func checkFlashRegionOverlap(inspection *FirmwareInspection) {
 			Summary: "固件文件写入范围没有重叠",
 		})
 	}
+}
+
+func saturatedRegionEnd(region FlashRegion) (uint64, bool) {
+	const maxUint64 = ^uint64(0)
+	if region.Size > maxUint64-region.Offset {
+		return maxUint64, true
+	}
+	return region.Offset + region.Size, false
 }
 
 func checkAppImageSize(inspection *FirmwareInspection, files map[uint64]packagekit.FlashFile, parts []Partition) {
@@ -316,4 +339,21 @@ func parseFlashOffset(value string) (uint64, error) {
 
 func hexOffset(offset uint64) string {
 	return fmt.Sprintf("0x%x", offset)
+}
+
+func windowsFilesystemPath(path string) string {
+	if goruntime.GOOS != "windows" || path == "" {
+		return path
+	}
+	clean := filepath.Clean(path)
+	if strings.HasPrefix(clean, `\\?\`) {
+		return clean
+	}
+	if strings.HasPrefix(clean, `\\`) {
+		return `\\?\UNC\` + strings.TrimPrefix(clean, `\\`)
+	}
+	if filepath.VolumeName(clean) != "" {
+		return `\\?\` + clean
+	}
+	return path
 }
