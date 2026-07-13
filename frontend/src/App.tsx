@@ -633,12 +633,12 @@ function CompatibilitySection({
                     {check.steps.length > 0 && <ol>{check.steps.map((step, stepIndex) => <li key={`${check.code}-step-${stepIndex}`}>{step}</li>)}</ol>}
                   </div>
                 )}
-                {check.technical && <details><summary>Technical</summary><pre>{check.technical}</pre></details>}
+                {check.technical && <details><summary>技术详情</summary><pre>{check.technical}</pre></details>}
               </li>
             ))}
           </ol>
 
-          {preflight.rawLog.length > 0 && <details className="compatibility-raw-log"><summary>RawLog</summary><pre>{preflight.rawLog.join("\n")}</pre></details>}
+          {preflight.rawLog.length > 0 && <details className="compatibility-raw-log"><summary>原始检测日志</summary><pre>{preflight.rawLog.join("\n")}</pre></details>}
         </>
       )}
 
@@ -705,9 +705,9 @@ async function mockCall(name: string, ...args: any[]): Promise<any> {
         canFlash: true,
         needsBuild: false,
         chip: "esp32s3",
-        hardwareVersion: "GK87 V3/V4",
-        display: "1.47 英寸屏幕",
-        minimumFlashBytes: 8388608,
+        hardwareVersion: "SCM_V4.0",
+        display: "320x240-st7789-8bit-parallel",
+        minimumFlashBytes: 16777216,
         minimumPsramBytes: 8388608,
         psramMode: "octal",
         writeFlashArgs: ["--flash_mode", "dio", "--flash_size", "detect", "--flash_freq", "80m"],
@@ -730,9 +730,9 @@ async function mockCall(name: string, ...args: any[]): Promise<any> {
   }
   if (name === "DetectCompatibility") {
     return {
-      overall: "compatible",
+      overall: "unknown",
       firmware: {
-        chip: "esp32s3", hardwareVersion: "GK87 V3/V4", display: "1.47 英寸屏幕", minimumFlashBytes: 8388608,
+        chip: "esp32s3", hardwareVersion: "SCM_V4.0", display: "320x240-st7789-8bit-parallel", minimumFlashBytes: 16777216,
         requiredPsramBytes: 8388608, requiresOctalPsram: true,
         flashFiles: [{ offset: 0, size: 20880, path: "bootloader/bootloader.bin" }, { offset: 131072, size: 4994032, path: "GK87-Screen.bin" }], partitions: [],
       },
@@ -743,9 +743,9 @@ async function mockCall(name: string, ...args: any[]): Promise<any> {
       },
       checks: [
         { code: "chip_compatible", status: "pass", title: "芯片型号匹配", summary: "固件与设备均为 ESP32-S3", resolution: "", steps: [], technical: "" },
-        { code: "flash_compatible", status: "pass", title: "Flash 容量满足要求", summary: "设备 16.0 MB，固件至少需要 8.0 MB", resolution: "", steps: [], technical: "" },
+        { code: "flash_compatible", status: "pass", title: "Flash 容量满足要求", summary: "设备 16.0 MB，固件至少需要 16.0 MB", resolution: "", steps: [], technical: "" },
         { code: "psram_compatible", status: "pass", title: "PSRAM 容量满足要求", summary: "设备 8.0 MB，固件至少需要 8.0 MB", resolution: "", steps: [], technical: "" },
-        { code: "hardware_unknown", status: "unknown", title: "无法自动确认主板硬件版本", summary: "通用 USB 探测不能区分主板 V3/V4", resolution: "请确认设备主板版本与固件适用范围一致。", steps: ["核对键盘背面标签或购买记录。", "确认后再开始刷机。"], technical: "required hardware=GK87 V3/V4; generic USB probe has no board revision" },
+        { code: "hardware_unknown", status: "unknown", title: "无法自动确认主板硬件版本", summary: "通用 USB 探测不能区分主板 V3/V4，当前固件面向 SCM_V4.0。", resolution: "V3/V4 显示接线不同，反复刷机不能修复接线差异；请核对 PCB 丝印并选择 V4 包。", steps: ["查看显示板或主板上的 PCB 丝印，确认实际硬件版本。", "确认丝印为 V4 后，选择标注 SCM_V4.0 的 V4 包。", "若不是 V4，不要继续反复刷机；改用与 PCB 版本匹配的固件包。"], technical: "required hardware=SCM_V4.0; generic USB probe has no board revision" },
       ],
       rawLog: ["probe: COM3 @ 460800", "Chip is ESP32-S3 (revision v0.2)"],
     } satisfies Report;
