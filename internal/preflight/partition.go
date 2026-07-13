@@ -67,6 +67,10 @@ func ValidatePartitions(parts []Partition) []CheckResult {
 }
 
 func MinimumFlashSize(parts []Partition) uint64 {
+	return flashCapacityTier(highestPartitionEnd(parts))
+}
+
+func highestPartitionEnd(parts []Partition) uint64 {
 	var highestEnd uint64
 	for _, part := range parts {
 		end := uint64(part.Offset) + uint64(part.Size)
@@ -74,6 +78,10 @@ func MinimumFlashSize(parts []Partition) uint64 {
 			highestEnd = end
 		}
 	}
+	return highestEnd
+}
+
+func flashCapacityTier(highestEnd uint64) uint64 {
 	if highestEnd == 0 {
 		return 0
 	}

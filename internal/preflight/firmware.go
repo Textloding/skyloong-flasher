@@ -41,6 +41,7 @@ func InspectFirmware(analysis *packagekit.Analysis) FirmwareInspection {
 		fmt.Sprintf("metadata flash=%d psram=%d psram_mode=%q", analysis.MinimumFlashBytes, analysis.MinimumPSRAMBytes, analysis.PSRAMMode),
 	)
 
+	highestFlashEnd := analysis.MinimumFlashBytes
 	filesByOffset := make(map[uint64]packagekit.FlashFile, len(analysis.FlashFiles))
 	for _, file := range analysis.FlashFiles {
 		offset, err := parseFlashOffset(file.Offset)
@@ -68,6 +69,9 @@ func InspectFirmware(analysis *packagekit.Analysis) FirmwareInspection {
 		region := FlashRegion{Offset: offset, Size: uint64(file.Size), Path: file.Path}
 		inspection.Requirements.FlashFiles = append(inspection.Requirements.FlashFiles, region)
 		filesByOffset[offset] = file
+		if end, overflow := saturatedRegionEnd(region); !overflow && end > highestFlashEnd {
+			highestFlashEnd = end
+		}
 		inspection.RawTechnical = append(inspection.RawTechnical,
 			fmt.Sprintf("flash file offset=%#x size=%#x path=%s", offset, file.Size, file.Path),
 		)
@@ -76,9 +80,8 @@ func InspectFirmware(analysis *packagekit.Analysis) FirmwareInspection {
 	parts, partitionOK := inspectPartitionTable(&inspection, filesByOffset[0x8000])
 	if partitionOK {
 		inspection.Requirements.Partitions = parts
-		partitionMinimum := MinimumFlashSize(parts)
-		if partitionMinimum > inspection.Requirements.MinimumFlashBytes {
-			inspection.Requirements.MinimumFlashBytes = partitionMinimum
+		if partitionEnd := highestPartitionEnd(parts); partitionEnd > highestFlashEnd {
+			highestFlashEnd = partitionEnd
 		}
 		partitionChecks := ValidatePartitions(parts)
 		if len(partitionChecks) == 0 {
@@ -92,6 +95,7 @@ func InspectFirmware(analysis *packagekit.Analysis) FirmwareInspection {
 			inspection.Checks = append(inspection.Checks, partitionChecks...)
 		}
 	}
+	inspection.Requirements.MinimumFlashBytes = flashCapacityTier(highestFlashEnd)
 
 	checkRequiredFlashFiles(&inspection, filesByOffset, parts, partitionOK)
 	checkFlashRegionOverlap(&inspection)

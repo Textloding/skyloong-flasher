@@ -168,6 +168,28 @@ func TestInspectFirmwareReportsOverlappingWriteRegions(t *testing.T) {
 	}
 }
 
+func TestInspectFirmwareIncludesFlashRegionEndInMinimumFlashRequirement(t *testing.T) {
+	analysis := completeFirmwareAnalysis(t)
+	analysis.FlashFiles = append(analysis.FlashFiles, packagekit.FlashFile{
+		Offset: "0xF00000",
+		Path:   "tail.bin",
+		Size:   2 * 1024 * 1024,
+	})
+
+	inspection := InspectFirmware(analysis)
+	if inspection.Requirements.MinimumFlashBytes != 32*1024*1024 {
+		t.Fatalf("MinimumFlashBytes = %#x, want 32MB", inspection.Requirements.MinimumFlashBytes)
+	}
+
+	report := Compare(inspection, DeviceProbe{Capabilities: DeviceCapabilities{
+		FlashBytes: 16 * 1024 * 1024,
+	}})
+	check, ok := findCheck(report.Checks, "flash_too_small")
+	if !ok || check.Status != StatusWarning {
+		t.Fatalf("checks = %#v, want flash_too_small warning", report.Checks)
+	}
+}
+
 func TestCheckFlashRegionOverlapReportsAddressOverflow(t *testing.T) {
 	inspection := FirmwareInspection{
 		Requirements: FirmwareRequirements{
@@ -186,6 +208,24 @@ func TestCheckFlashRegionOverlapReportsAddressOverflow(t *testing.T) {
 	}
 	if _, ok := findCheck(inspection.Checks, "flash_region_layout"); ok {
 		t.Fatalf("checks = %#v, overflow must not produce layout pass", inspection.Checks)
+	}
+}
+
+func TestInspectFirmwareIgnoresOverflowingFlashRegionForMinimumFlash(t *testing.T) {
+	analysis := completeFirmwareAnalysis(t)
+	analysis.FlashFiles = append(analysis.FlashFiles, packagekit.FlashFile{
+		Offset: "0xfffffffffffffff0",
+		Path:   "overflow.bin",
+		Size:   0x20,
+	})
+
+	inspection := InspectFirmware(analysis)
+	if inspection.Requirements.MinimumFlashBytes != 16*1024*1024 {
+		t.Fatalf("MinimumFlashBytes = %#x, want 16MB", inspection.Requirements.MinimumFlashBytes)
+	}
+	check, ok := findCheck(inspection.Checks, "flash_region_overflow")
+	if !ok || check.Status != StatusWarning {
+		t.Fatalf("checks = %#v, want flash_region_overflow warning", inspection.Checks)
 	}
 }
 

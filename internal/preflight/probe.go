@@ -178,11 +178,15 @@ func parseEsptoolOutput(output string) DeviceCapabilities {
 }
 
 func parseChipLine(line string, capabilities *DeviceCapabilities) {
-	const prefix = "Chip is "
-	if !strings.HasPrefix(line, prefix) {
+	var chipAndPackage string
+	switch {
+	case strings.HasPrefix(line, "Chip is "):
+		chipAndPackage = strings.TrimPrefix(line, "Chip is ")
+	case strings.HasPrefix(line, "Chip type:"):
+		chipAndPackage = strings.TrimSpace(strings.TrimPrefix(line, "Chip type:"))
+	default:
 		return
 	}
-	chipAndPackage := strings.TrimPrefix(line, prefix)
 	revisionIndex := strings.LastIndex(chipAndPackage, " (revision ")
 	if revisionIndex < 0 || !strings.HasSuffix(chipAndPackage, ")") {
 		return

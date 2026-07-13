@@ -54,6 +54,17 @@ func TestParseEsptoolOutputReadsDeviceCapabilities(t *testing.T) {
 	}
 }
 
+func TestParseEsptoolOutputReadsV5ChipType(t *testing.T) {
+	got := parseEsptoolOutput("Chip type:          ESP32-S3 (QFN56) (revision v0.2)")
+
+	if got.Chip != "ESP32-S3" {
+		t.Errorf("Chip = %q, want ESP32-S3", got.Chip)
+	}
+	if got.Revision != "v0.2" {
+		t.Errorf("Revision = %q, want v0.2", got.Revision)
+	}
+}
+
 func TestParseEsptoolOutputLeavesMissingPSRAMUnknown(t *testing.T) {
 	got := parseEsptoolOutput("Features: WiFi, BLE\nDetected flash size: 8MB")
 
