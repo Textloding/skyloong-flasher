@@ -706,13 +706,18 @@ input:focus {
 
 .file-list div {
   display: grid;
-  grid-template-columns: 76px 1fr auto;
+  grid-template-columns: 76px minmax(0, 1fr) auto;
   gap: 8px;
   align-items: center;
   padding: 10px 12px;
   border-radius: 14px;
   color: #c6d0dc;
   background: rgba(0, 0, 0, 0.16);
+}
+
+.file-list span {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 code {
