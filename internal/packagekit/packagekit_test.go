@@ -192,6 +192,91 @@ func TestAnalyzeZipMissingFileHasFriendlyMessage(t *testing.T) {
 	}
 }
 
+func TestAnalyzeDirReadsFirmwareMetadata(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "CMakeLists.txt"), []byte("cmake_minimum_required(VERSION 3.16)"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "main"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	metadata := `{
+		"schema_version": 1,
+		"hardware_version": "SCM_V4.0",
+		"display": "320x240-st7789-8bit-parallel",
+		"minimum_flash_bytes": 16777216,
+		"minimum_psram_bytes": 8388608,
+		"psram_mode": "octal"
+	}`
+	if err := os.WriteFile(filepath.Join(root, "skyloong_firmware.json"), []byte(metadata), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	analysis, err := AnalyzeDir(root)
+	if err != nil {
+		t.Fatalf("AnalyzeDir() error = %v", err)
+	}
+	assertFirmwareMetadata(t, analysis)
+}
+
+func TestAnalyzeZipReadsFirmwareMetadata(t *testing.T) {
+	zipPath := makeZip(t, map[string]string{
+		"SKYLOONG-main/CMakeLists.txt": "cmake_minimum_required(VERSION 3.16)",
+		"SKYLOONG-main/main/main.cpp":  "void app_main(){}",
+		"SKYLOONG-main/skyloong_firmware.json": `{
+			"schema_version": 1,
+			"hardware_version": "SCM_V4.0",
+			"display": "320x240-st7789-8bit-parallel",
+			"minimum_flash_bytes": 16777216,
+			"minimum_psram_bytes": 8388608,
+			"psram_mode": "octal"
+		}`,
+	})
+
+	analysis, err := AnalyzeZip(zipPath, t.TempDir())
+	if err != nil {
+		t.Fatalf("AnalyzeZip() error = %v", err)
+	}
+	assertFirmwareMetadata(t, analysis)
+}
+
+func TestAnalyzeDirWithoutFirmwareMetadataStaysCompatible(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "CMakeLists.txt"), []byte("cmake_minimum_required(VERSION 3.16)"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "main"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	analysis, err := AnalyzeDir(root)
+	if err != nil {
+		t.Fatalf("AnalyzeDir() error = %v", err)
+	}
+	if analysis.HardwareVersion != "" || analysis.MinimumFlashBytes != 0 || analysis.MinimumPSRAMBytes != 0 {
+		t.Fatalf("unexpected metadata for legacy package: %#v", analysis)
+	}
+}
+
+func assertFirmwareMetadata(t *testing.T, analysis *Analysis) {
+	t.Helper()
+	if analysis.HardwareVersion != "SCM_V4.0" {
+		t.Fatalf("hardware version = %q", analysis.HardwareVersion)
+	}
+	if analysis.Display != "320x240-st7789-8bit-parallel" {
+		t.Fatalf("display = %q", analysis.Display)
+	}
+	if analysis.MinimumFlashBytes != 16*1024*1024 {
+		t.Fatalf("minimum flash = %d", analysis.MinimumFlashBytes)
+	}
+	if analysis.MinimumPSRAMBytes != 8*1024*1024 {
+		t.Fatalf("minimum PSRAM = %d", analysis.MinimumPSRAMBytes)
+	}
+	if analysis.PSRAMMode != "octal" {
+		t.Fatalf("PSRAM mode = %q", analysis.PSRAMMode)
+	}
+}
+
 func makeZip(t *testing.T, files map[string]string) string {
 	t.Helper()
 

@@ -25,18 +25,23 @@ const (
 )
 
 type Analysis struct {
-	SourcePath     string      `json:"sourcePath"`
-	Root           string      `json:"root"`
-	Kind           string      `json:"kind"`
-	ProjectName    string      `json:"projectName"`
-	CanFlash       bool        `json:"canFlash"`
-	NeedsBuild     bool        `json:"needsBuild"`
-	Chip           string      `json:"chip"`
-	WriteFlashArgs []string    `json:"writeFlashArgs"`
-	Before         string      `json:"before"`
-	After          string      `json:"after"`
-	FlashFiles     []FlashFile `json:"flashFiles"`
-	Messages       []string    `json:"messages"`
+	SourcePath        string      `json:"sourcePath"`
+	Root              string      `json:"root"`
+	Kind              string      `json:"kind"`
+	ProjectName       string      `json:"projectName"`
+	CanFlash          bool        `json:"canFlash"`
+	NeedsBuild        bool        `json:"needsBuild"`
+	Chip              string      `json:"chip"`
+	HardwareVersion   string      `json:"hardwareVersion"`
+	Display           string      `json:"display"`
+	MinimumFlashBytes uint64      `json:"minimumFlashBytes"`
+	MinimumPSRAMBytes uint64      `json:"minimumPsramBytes"`
+	PSRAMMode         string      `json:"psramMode"`
+	WriteFlashArgs    []string    `json:"writeFlashArgs"`
+	Before            string      `json:"before"`
+	After             string      `json:"after"`
+	FlashFiles        []FlashFile `json:"flashFiles"`
+	Messages          []string    `json:"messages"`
 }
 
 type FlashFile struct {
@@ -53,6 +58,15 @@ type flasherArgsJSON struct {
 		Before string `json:"before"`
 		After  string `json:"after"`
 	} `json:"extra_esptool_args"`
+}
+
+type firmwareMetadataJSON struct {
+	SchemaVersion     int    `json:"schema_version"`
+	HardwareVersion   string `json:"hardware_version"`
+	Display           string `json:"display"`
+	MinimumFlashBytes uint64 `json:"minimum_flash_bytes"`
+	MinimumPSRAMBytes uint64 `json:"minimum_psram_bytes"`
+	PSRAMMode         string `json:"psram_mode"`
 }
 
 func AnalyzeZip(zipPath string, workspace string) (*Analysis, error) {
@@ -251,6 +265,9 @@ func AnalyzeDir(root string) (*Analysis, error) {
 		Before:      "default_reset",
 		After:       "hard_reset",
 	}
+	if err := applyFirmwareMetadata(analysis, absRoot); err != nil {
+		return nil, err
+	}
 
 	if isIDFSource(absRoot) {
 		return analyzeSourceRoot(analysis, absRoot)
@@ -270,6 +287,38 @@ func AnalyzeDir(root string) (*Analysis, error) {
 	}
 
 	return analysis, errors.New("missing flasher_args.json, flash_args or ESP-IDF source structure")
+}
+
+func applyFirmwareMetadata(analysis *Analysis, root string) error {
+	metadataPath := filepath.Join(root, "skyloong_firmware.json")
+	if _, err := os.Stat(windowsFilesystemPath(metadataPath)); err != nil {
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("cannot inspect firmware metadata %s: %w", metadataPath, err)
+		}
+		metadataPath = findFirst(root, "skyloong_firmware.json")
+	}
+	if metadataPath == "" {
+		return nil
+	}
+
+	raw, err := os.ReadFile(windowsFilesystemPath(metadataPath))
+	if err != nil {
+		return fmt.Errorf("cannot read firmware metadata %s: %w", metadataPath, err)
+	}
+	var metadata firmwareMetadataJSON
+	if err := json.Unmarshal(raw, &metadata); err != nil {
+		return fmt.Errorf("parse firmware metadata %s failed: %w", metadataPath, err)
+	}
+	if metadata.SchemaVersion != 1 {
+		return fmt.Errorf("unsupported firmware metadata schema %d in %s", metadata.SchemaVersion, metadataPath)
+	}
+
+	analysis.HardwareVersion = strings.TrimSpace(metadata.HardwareVersion)
+	analysis.Display = strings.TrimSpace(metadata.Display)
+	analysis.MinimumFlashBytes = metadata.MinimumFlashBytes
+	analysis.MinimumPSRAMBytes = metadata.MinimumPSRAMBytes
+	analysis.PSRAMMode = strings.ToLower(strings.TrimSpace(metadata.PSRAMMode))
+	return nil
 }
 
 func analyzeSourceRoot(analysis *Analysis, sourceRoot string) (*Analysis, error) {
