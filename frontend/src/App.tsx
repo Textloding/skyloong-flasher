@@ -9,7 +9,14 @@ type Analysis = {
   canFlash: boolean;
   needsBuild: boolean;
   chip: string;
+  hardwareVersion: string;
+  display: string;
+  minimumFlashBytes: number;
+  minimumPsramBytes: number;
+  psramMode: string;
   writeFlashArgs: string[];
+  before: string;
+  after: string;
   flashFiles: FlashFile[];
   messages: string[];
 };
@@ -27,6 +34,48 @@ type RuntimeStatus = {
 type Device = { name: string; port: string; pnpDeviceId: string; mode: string; canFlash: boolean; score: number; hint: string };
 type AnalyzeResponse = { analysis: Analysis; runtime: RuntimeStatus; devices: Device[] };
 type TaskProgress = { stage: string; percent: number; message: string };
+type CompatibilityOverall = "compatible" | "risk" | "unknown" | "error";
+type CheckStatus = "pass" | "warning" | "unknown" | "error";
+type TriState = "unknown" | "enabled" | "disabled";
+type FirmwareRequirements = {
+  chip: string;
+  hardwareVersion: string;
+  display: string;
+  minimumFlashBytes: number;
+  requiredPsramBytes: number;
+  requiresOctalPsram: boolean;
+  flashFiles: { offset: number; size: number; path: string }[];
+  partitions: { type: number; subtype: number; offset: number; size: number; label: string; flags: number }[];
+};
+type DeviceCapabilities = {
+  chip: string;
+  revision: string;
+  flashBytes: number;
+  flashDescription: string;
+  psramBytes: number;
+  psramDescription: string;
+  psramMode: string;
+  psramKnown: boolean;
+  secureBoot: TriState;
+  flashEncryption: TriState;
+  rawOutput: string[];
+};
+type CheckResult = {
+  code: string;
+  status: CheckStatus;
+  title: string;
+  summary: string;
+  resolution: string;
+  steps: string[];
+  technical: string;
+};
+type Report = {
+  overall: CompatibilityOverall;
+  firmware: FirmwareRequirements;
+  device: DeviceCapabilities;
+  checks: CheckResult[];
+  rawLog: string[];
+};
 
 declare global {
   interface Window {
@@ -35,7 +84,7 @@ declare global {
   }
 }
 
-const steps = ["选择固件", "准备固件", "连接屏幕", "刷机"];
+const steps = ["选择固件", "准备固件", "连接屏幕", "兼容性", "刷机"];
 
 async function call<T>(name: string, ...args: any[]): Promise<T> {
   const fn = window.go?.main?.App?.[name];
@@ -59,7 +108,15 @@ function App() {
   const [progress, setProgress] = useState("");
   const [taskProgress, setTaskProgress] = useState<TaskProgress>({ stage: "待命", percent: 0, message: "选择固件来源后开始。" });
   const [error, setError] = useState("");
+  const [preflight, setPreflight] = useState<Report | null>(null);
+  const [preflightBusy, setPreflightBusy] = useState(false);
+  const [preflightError, setPreflightError] = useState("");
+  const [preflightDetectedAt, setPreflightDetectedAt] = useState<Date | null>(null);
   const logRef = useRef<HTMLPreElement | null>(null);
+  const preflightRequestRef = useRef(0);
+  const preflightInputVersionRef = useRef(0);
+  const preflightKeyRef = useRef("");
+  const preflightInputsRef = useRef<{ analysis: Analysis | null; selectedPort: string }>({ analysis: null, selectedPort: "" });
 
   useEffect(() => {
     const offLog = window.runtime?.EventsOn?.("flash:log", (payload) => {
@@ -94,12 +151,31 @@ function App() {
     if (node) node.scrollTop = node.scrollHeight;
   }, [logs]);
 
+  useEffect(() => {
+    const previous = preflightInputsRef.current;
+    if (previous.analysis === analysis && previous.selectedPort === selectedPort) return;
+
+    preflightInputsRef.current = { analysis, selectedPort };
+    preflightInputVersionRef.current += 1;
+    preflightRequestRef.current += 1;
+    preflightKeyRef.current = "";
+    setPreflight(null);
+    setPreflightBusy(false);
+    setPreflightError("");
+    setPreflightDetectedAt(null);
+
+    if (analysis?.canFlash && selectedPort) {
+      void detectCompatibility(false, preflightInputVersionRef.current);
+    }
+  }, [analysis, selectedPort]);
+
   const activeStep = useMemo(() => {
     if (!analysis) return 0;
     if (analysis.needsBuild || !analysis.canFlash) return 1;
     if (!selectedPort) return 2;
-    return 3;
-  }, [analysis, selectedPort]);
+    if (!preflight && !preflightError) return 3;
+    return 4;
+  }, [analysis, selectedPort, preflight, preflightError]);
 
   const bestDevice = devices.find((d) => d.canFlash) ?? devices[0];
   const flashButtonText = busy ? "任务执行中..." : analysis?.needsBuild ? "请先构建固件" : "开始刷机";
@@ -140,6 +216,46 @@ function App() {
     if (showProgress) {
       setTaskProgress({ stage: "扫描设备", percent: 100, message: `扫描完成，发现 ${next.length} 个候选设备。` });
     }
+  }
+
+  async function detectCompatibility(force = false, inputVersion = preflightInputVersionRef.current) {
+    const requestAnalysis = analysis;
+    const requestPort = selectedPort;
+    if (!requestAnalysis?.canFlash || !requestPort) return;
+
+    const requestKey = `${inputVersion}:${requestPort}`;
+    if (!force && preflightKeyRef.current === requestKey) return;
+
+    const requestId = ++preflightRequestRef.current;
+    preflightKeyRef.current = requestKey;
+    setPreflightBusy(true);
+    setPreflightError("");
+
+    try {
+      const result = await call<Report>("DetectCompatibility", { port: requestPort, baud: 460800 });
+      if (!isCurrentPreflightRequest(requestId, inputVersion, requestAnalysis, requestPort)) return;
+      setPreflight(result);
+      setPreflightDetectedAt(new Date());
+    } catch (err) {
+      if (!isCurrentPreflightRequest(requestId, inputVersion, requestAnalysis, requestPort)) return;
+      setPreflight(null);
+      setPreflightError(userFacingError(err));
+      setPreflightDetectedAt(new Date());
+    } finally {
+      if (isCurrentPreflightRequest(requestId, inputVersion, requestAnalysis, requestPort)) {
+        setPreflightBusy(false);
+      }
+    }
+  }
+
+  function isCurrentPreflightRequest(requestId: number, inputVersion: number, requestAnalysis: Analysis, requestPort: string) {
+    const currentInputs = preflightInputsRef.current;
+    return (
+      preflightRequestRef.current === requestId &&
+      preflightInputVersionRef.current === inputVersion &&
+      currentInputs.analysis === requestAnalysis &&
+      currentInputs.selectedPort === requestPort
+    );
   }
 
   async function chooseZip() {
@@ -357,9 +473,19 @@ function App() {
           </div>
         </div>
 
+        <CompatibilitySection
+          analysis={analysis}
+          preflight={preflight}
+          busy={preflightBusy}
+          error={preflightError}
+          detectedAt={preflightDetectedAt}
+          hasPort={Boolean(selectedPort)}
+          onRetry={() => void detectCompatibility(true)}
+        />
+
         <div className="glass flash-card">
           <div className="section-title">
-            <span>04</span>
+            <span>05</span>
             <div>
               <h2>开始刷机</h2>
               <p>确认固件可刷、运行时就绪、串口正确后再开始。</p>
@@ -423,6 +549,112 @@ function shortPath(path: string) {
   return path.split(/[\\/]/).slice(-2).join("/");
 }
 
+function CompatibilitySection({
+  analysis,
+  preflight,
+  busy,
+  error,
+  detectedAt,
+  hasPort,
+  onRetry,
+}: {
+  analysis: Analysis | null;
+  preflight: Report | null;
+  busy: boolean;
+  error: string;
+  detectedAt: Date | null;
+  hasPort: boolean;
+  onRetry: () => void;
+}) {
+  const overall = preflight?.overall ?? (error ? "error" : undefined);
+  const overallLabel: Record<CompatibilityOverall, string> = {
+    compatible: "兼容",
+    risk: "检测到风险",
+    unknown: "部分信息未知",
+    error: "检测失败",
+  };
+
+  return (
+    <section className="compatibility-section" aria-labelledby="compatibility-title" aria-busy={busy}>
+      <div className="compatibility-heading">
+        <div>
+          <p className="section-kicker">04</p>
+          <h2 id="compatibility-title">设备兼容性检测</h2>
+          <p>对比当前固件与已选设备的刷写条件。</p>
+        </div>
+        <div className="compatibility-actions">
+          {overall && <strong className={`compatibility-overall ${overall}`}>{overallLabel[overall]}</strong>}
+          {detectedAt && <time dateTime={detectedAt.toISOString()}>检测时间：{detectedAt.toLocaleString()}</time>}
+          <button type="button" className="secondary" onClick={onRetry} disabled={!analysis?.canFlash || !hasPort || busy}>
+            重新检测
+          </button>
+        </div>
+      </div>
+
+      {busy && <p className="compatibility-loading" role="status" aria-live="polite">正在读取设备信息并比对兼容性...</p>}
+      {error && <div className="error compatibility-error" role="alert">{error}</div>}
+
+      {preflight && (
+        <>
+          <dl className="compatibility-facts">
+            <div>
+              <dt>芯片</dt>
+              <dd><span>固件：{preflight.firmware.chip || "未知"}</span><span>设备：{preflight.device.chip || "未知"}</span></dd>
+            </div>
+            <div>
+              <dt>Flash</dt>
+              <dd><span>固件：至少 {formatSize(preflight.firmware.minimumFlashBytes)}</span><span>设备：{preflight.device.flashDescription || formatSize(preflight.device.flashBytes)}</span></dd>
+            </div>
+            <div>
+              <dt>PSRAM</dt>
+              <dd><span>固件：{preflight.firmware.requiredPsramBytes ? `${formatSize(preflight.firmware.requiredPsramBytes)}${preflight.firmware.requiresOctalPsram ? "，octal" : ""}` : "未要求"}</span><span>设备：{preflight.device.psramKnown ? `${preflight.device.psramDescription || formatSize(preflight.device.psramBytes)}${preflight.device.psramMode ? `，${preflight.device.psramMode}` : ""}` : "未知"}</span></dd>
+            </div>
+            <div>
+              <dt>安全状态</dt>
+              <dd><span>固件：通用固件</span><span>设备：安全启动 {triStateLabel(preflight.device.secureBoot)}；Flash 加密 {triStateLabel(preflight.device.flashEncryption)}</span></dd>
+            </div>
+            <div>
+              <dt>硬件版本</dt>
+              <dd><span>固件：{preflight.firmware.hardwareVersion || "未声明"}{preflight.firmware.display ? `（${preflight.firmware.display}）` : ""}</span><span>设备：通用探测未报告主板版本</span></dd>
+            </div>
+          </dl>
+
+          <ol className="compatibility-checks">
+            {preflight.checks.map((check, index) => (
+              <li key={`${check.code}-${index}`} className={`compatibility-check ${check.status}`}>
+                <div className="check-heading">
+                  <strong>{check.title}</strong>
+                  <span>{checkStatusLabel(check.status)}</span>
+                </div>
+                <p>{check.summary}</p>
+                {check.status !== "pass" && (check.resolution || check.steps.length > 0) && (
+                  <div className="check-resolution">
+                    {check.resolution && <p><strong>解决建议：</strong>{check.resolution}</p>}
+                    {check.steps.length > 0 && <ol>{check.steps.map((step, stepIndex) => <li key={`${check.code}-step-${stepIndex}`}>{step}</li>)}</ol>}
+                  </div>
+                )}
+                {check.technical && <details><summary>Technical</summary><pre>{check.technical}</pre></details>}
+              </li>
+            ))}
+          </ol>
+
+          {preflight.rawLog.length > 0 && <details className="compatibility-raw-log"><summary>RawLog</summary><pre>{preflight.rawLog.join("\n")}</pre></details>}
+        </>
+      )}
+
+      {!preflight && !busy && !error && <p className="compatibility-empty">{analysis?.canFlash && hasPort ? "等待兼容性检测结果。" : "选择可刷写固件和设备串口后自动开始检测。"}</p>}
+    </section>
+  );
+}
+
+function checkStatusLabel(status: CheckStatus) {
+  return { pass: "通过", warning: "风险", unknown: "未知", error: "失败" }[status];
+}
+
+function triStateLabel(state: TriState) {
+  return { enabled: "已启用", disabled: "未启用", unknown: "未知" }[state];
+}
+
 function userFacingError(err: unknown) {
   const raw = String(err ?? "").replace(/^Error:\s*/i, "");
   const lower = raw.toLowerCase();
@@ -473,6 +705,11 @@ async function mockCall(name: string, ...args: any[]): Promise<any> {
         canFlash: true,
         needsBuild: false,
         chip: "esp32s3",
+        hardwareVersion: "GK87 V3/V4",
+        display: "1.47 英寸屏幕",
+        minimumFlashBytes: 8388608,
+        minimumPsramBytes: 8388608,
+        psramMode: "octal",
         writeFlashArgs: ["--flash_mode", "dio", "--flash_size", "detect", "--flash_freq", "80m"],
         messages: ["浏览器预览：已模拟解析固件包。"],
         flashFiles: [
@@ -490,6 +727,28 @@ async function mockCall(name: string, ...args: any[]): Promise<any> {
   if (name === "GetLogFilePath") return "";
   if (name === "BuildSourcePackage") {
     return mockCall("AnalyzeLocalZip", "preview.zip");
+  }
+  if (name === "DetectCompatibility") {
+    return {
+      overall: "compatible",
+      firmware: {
+        chip: "esp32s3", hardwareVersion: "GK87 V3/V4", display: "1.47 英寸屏幕", minimumFlashBytes: 8388608,
+        requiredPsramBytes: 8388608, requiresOctalPsram: true,
+        flashFiles: [{ offset: 0, size: 20880, path: "bootloader/bootloader.bin" }, { offset: 131072, size: 4994032, path: "GK87-Screen.bin" }], partitions: [],
+      },
+      device: {
+        chip: "ESP32-S3", revision: "v0.2", flashBytes: 16777216, flashDescription: "16.0 MB", psramBytes: 8388608, psramDescription: "8.0 MB",
+        psramMode: "octal", psramKnown: true, secureBoot: "disabled", flashEncryption: "disabled",
+        rawOutput: ["Chip is ESP32-S3 (revision v0.2)", "Detected 16MB flash and 8MB octal PSRAM"],
+      },
+      checks: [
+        { code: "chip_compatible", status: "pass", title: "芯片型号匹配", summary: "固件与设备均为 ESP32-S3", resolution: "", steps: [], technical: "" },
+        { code: "flash_compatible", status: "pass", title: "Flash 容量满足要求", summary: "设备 16.0 MB，固件至少需要 8.0 MB", resolution: "", steps: [], technical: "" },
+        { code: "psram_compatible", status: "pass", title: "PSRAM 容量满足要求", summary: "设备 8.0 MB，固件至少需要 8.0 MB", resolution: "", steps: [], technical: "" },
+        { code: "hardware_unknown", status: "unknown", title: "无法自动确认主板硬件版本", summary: "通用 USB 探测不能区分主板 V3/V4", resolution: "请确认设备主板版本与固件适用范围一致。", steps: ["核对键盘背面标签或购买记录。", "确认后再开始刷机。"], technical: "required hardware=GK87 V3/V4; generic USB probe has no board revision" },
+      ],
+      rawLog: ["probe: COM3 @ 460800", "Chip is ESP32-S3 (revision v0.2)"],
+    } satisfies Report;
   }
   if (name === "StartFlash") return undefined;
   return undefined;

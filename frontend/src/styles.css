@@ -36,6 +36,13 @@ button:disabled {
   opacity: 0.48;
 }
 
+button:focus-visible,
+input:focus-visible,
+summary:focus-visible {
+  outline: 2px solid #8bd8bc;
+  outline-offset: 3px;
+}
+
 .app-shell {
   position: relative;
   min-height: 100dvh;
@@ -248,7 +255,9 @@ h1 {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   grid-template-areas:
     "source info"
-    "device flash";
+    "device device"
+    "compatibility compatibility"
+    "flash flash";
   gap: 18px;
   max-width: 1240px;
   margin: 0 auto;
@@ -271,6 +280,216 @@ h1 {
 
 .flash-card {
   grid-area: flash;
+}
+
+.compatibility-section {
+  grid-area: compatibility;
+  min-width: 0;
+  padding: 4px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.16);
+}
+
+.compatibility-heading {
+  display: flex;
+  gap: 18px;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 20px 0 14px;
+}
+
+.section-kicker {
+  margin: 0 0 4px;
+  color: #8bd8bc;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.compatibility-heading h2 {
+  margin-bottom: 4px;
+  font-size: 20px;
+}
+
+.compatibility-heading p,
+.compatibility-empty,
+.compatibility-loading {
+  margin: 0;
+  color: #a8b3c1;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.compatibility-actions {
+  display: grid;
+  grid-template-columns: auto auto auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.compatibility-actions time {
+  color: #a8b3c1;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.compatibility-actions .secondary {
+  min-height: 36px;
+  padding: 0 12px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.compatibility-overall,
+.check-heading span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.compatibility-overall.compatible,
+.compatibility-check.pass .check-heading span {
+  color: #8bd8bc;
+  background: rgba(139, 216, 188, 0.14);
+}
+
+.compatibility-overall.risk,
+.compatibility-check.warning .check-heading span {
+  color: #f1dca6;
+  background: rgba(229, 196, 122, 0.14);
+}
+
+.compatibility-overall.unknown,
+.compatibility-check.unknown .check-heading span {
+  color: #a8d0e5;
+  background: rgba(126, 180, 211, 0.14);
+}
+
+.compatibility-overall.error,
+.compatibility-check.error .check-heading span {
+  color: #ffd9d9;
+  background: rgba(255, 140, 140, 0.14);
+}
+
+.compatibility-loading,
+.compatibility-empty {
+  padding: 14px 0;
+}
+
+.compatibility-error {
+  margin-top: 0;
+}
+
+.compatibility-facts {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0 0 16px;
+}
+
+.compatibility-facts > div {
+  min-width: 0;
+  padding: 8px 12px;
+  border-left: 1px solid rgba(255, 255, 255, 0.18);
+}
+
+.compatibility-facts dt {
+  margin-bottom: 8px;
+  color: #9ea9b8;
+  font-size: 12px;
+}
+
+.compatibility-facts dd {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  color: #eef2f6;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.compatibility-facts dd span:first-child {
+  color: #b9c5d2;
+}
+
+.compatibility-checks {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding-left: 24px;
+}
+
+.compatibility-check {
+  min-width: 0;
+  padding: 12px 14px;
+  border-left: 3px solid rgba(255, 255, 255, 0.2);
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.compatibility-check.pass { border-left-color: #8bd8bc; }
+.compatibility-check.warning { border-left-color: #e5c47a; }
+.compatibility-check.unknown { border-left-color: #7eb4d3; }
+.compatibility-check.error { border-left-color: #ff8c8c; }
+
+.check-heading {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.check-heading strong,
+.compatibility-check p,
+.check-resolution,
+.compatibility-check details {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.compatibility-check p {
+  margin: 8px 0 0;
+  color: #c1cad6;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.check-resolution {
+  margin-top: 10px;
+  color: #dbe3ec;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.check-resolution p {
+  margin: 0;
+}
+
+.check-resolution ol {
+  margin: 8px 0 0;
+  padding-left: 22px;
+}
+
+.compatibility-check details,
+.compatibility-raw-log {
+  margin-top: 10px;
+}
+
+.compatibility-check summary,
+.compatibility-raw-log summary {
+  cursor: pointer;
+  color: #a8d0e5;
+  font-size: 12px;
+}
+
+.compatibility-check pre,
+.compatibility-raw-log pre {
+  height: auto;
+  max-height: 240px;
+  margin: 8px 0 0;
+  border-radius: 8px;
 }
 
 .source-card,
@@ -606,7 +825,25 @@ pre::-webkit-scrollbar-thumb {
       "source"
       "info"
       "device"
+      "compatibility"
       "flash";
+  }
+
+  .compatibility-heading {
+    display: grid;
+  }
+
+  .compatibility-actions {
+    grid-template-columns: 1fr;
+    justify-items: start;
+  }
+
+  .compatibility-actions time {
+    white-space: normal;
+  }
+
+  .compatibility-facts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .steps {
