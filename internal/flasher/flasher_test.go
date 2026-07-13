@@ -1,6 +1,7 @@
 package flasher
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -64,5 +65,58 @@ func TestBuildCommandForEIMEsptool(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("command %q missing %q", got, want)
 		}
+	}
+}
+
+func TestBuildCommandPreservesFlashArgumentOrder(t *testing.T) {
+	analysis := &packagekit.Analysis{
+		CanFlash:       true,
+		Chip:           "esp32s3",
+		WriteFlashArgs: []string{"--flash_mode", "dio", "--flash_size", "detect"},
+		Before:         "default_reset",
+		After:          "hard_reset",
+		FlashFiles: []packagekit.FlashFile{
+			{Offset: "0x0", Path: `C:\firmware files\bootloader.bin`},
+			{Offset: "0x20000", Path: `C:\firmware files\application.bin`},
+		},
+	}
+	status := runtimekit.Status{
+		Available: true,
+		Kind:      runtimekit.KindExecutable,
+		ToolPath:  `C:\ESP Tools\esptool.exe`,
+	}
+
+	cmd, err := BuildCommand(status, analysis, "COM12", 921600)
+	if err != nil {
+		t.Fatalf("BuildCommand() error = %v", err)
+	}
+	want := []string{
+		status.ToolPath,
+		"-p", "COM12",
+		"-b", "921600",
+		"--before", "default_reset",
+		"--after", "hard_reset",
+		"--chip", "esp32s3",
+		"write_flash",
+		"--flash_mode", "dio",
+		"--flash_size", "detect",
+		"0x0", `C:\firmware files\bootloader.bin`,
+		"0x20000", `C:\firmware files\application.bin`,
+	}
+	if !reflect.DeepEqual(cmd.Args, want) {
+		t.Fatalf("BuildCommand() args = %#v, want %#v", cmd.Args, want)
+	}
+}
+
+func TestBuildCommandReportsUnsupportedRuntimeInChinese(t *testing.T) {
+	analysis := &packagekit.Analysis{CanFlash: true}
+	status := runtimekit.Status{Available: true, Kind: runtimekit.KindMissing}
+
+	_, err := BuildCommand(status, analysis, "COM3", 460800)
+	if err == nil {
+		t.Fatal("BuildCommand() error = nil, want unsupported runtime error")
+	}
+	if !strings.Contains(err.Error(), "不支持") {
+		t.Fatalf("BuildCommand() error = %q, want readable Chinese text", err)
 	}
 }

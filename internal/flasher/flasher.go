@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/Textloding/skyloong-flasher/internal/esptoolcmd"
 	"github.com/Textloding/skyloong-flasher/internal/packagekit"
 	"github.com/Textloding/skyloong-flasher/internal/processutil"
 	"github.com/Textloding/skyloong-flasher/internal/runtimekit"
@@ -47,19 +48,7 @@ func BuildCommand(status runtimekit.Status, analysis *packagekit.Analysis, port 
 		args = append(args, file.Offset, file.Path)
 	}
 
-	if status.Kind == runtimekit.KindEIM {
-		cmdArgs := append([]string{"esptool.py"}, args...)
-		return runtimekit.EIMRunCommand(status, cmdArgs...), nil
-	}
-	if status.Kind == runtimekit.KindPythonScript {
-		cmdArgs := append([]string{status.ToolPath}, args...)
-		cmd := processutil.Command(status.PythonPath, cmdArgs...)
-		cmd.Env = runtimekit.CommandEnv(status)
-		return cmd, nil
-	}
-	cmd := processutil.Command(status.ToolPath, args...)
-	cmd.Env = runtimekit.CommandEnv(status)
-	return cmd, nil
+	return esptoolcmd.Build(status, args...)
 }
 
 func Run(ctx context.Context, status runtimekit.Status, analysis *packagekit.Analysis, port string, baud int, log LogFunc) error {
