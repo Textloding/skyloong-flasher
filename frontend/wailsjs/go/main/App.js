@@ -14,6 +14,10 @@ export function CheckRuntime() {
   return window['go']['main']['App']['CheckRuntime']();
 }
 
+export function DetectCompatibility(arg1) {
+  return window['go']['main']['App']['DetectCompatibility'](arg1);
+}
+
 export function DownloadAndAnalyzeGithub(arg1) {
   return window['go']['main']['App']['DownloadAndAnalyzeGithub'](arg1);
 }
