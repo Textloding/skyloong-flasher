@@ -148,6 +148,121 @@ func TestDetectCompatibilityGeneratesReportLogsProbeAndPreservesFlashState(t *te
 	}
 }
 
+func TestDetectCompatibilityCancelsPreviousDetectionWithoutStaleCleanupCancelingLatest(t *testing.T) {
+	makeDetectedRuntimeAvailable(t)
+
+	app := NewApp()
+	app.cacheDir = t.TempDir()
+	app.current = &packagekit.Analysis{ProjectName: "firmware", CanFlash: true}
+	firstStarted := make(chan struct{})
+	firstCanceled := make(chan struct{})
+	allowFirstReturn := make(chan struct{})
+	secondStarted := make(chan struct{})
+	secondCanceled := make(chan struct{})
+	app.probeDevice = func(ctx context.Context, _ runtimekit.Status, port string, _ int, _ func(string)) preflight.DeviceProbe {
+		switch port {
+		case "COM1":
+			close(firstStarted)
+			<-ctx.Done()
+			close(firstCanceled)
+			<-allowFirstReturn
+		case "COM2":
+			close(secondStarted)
+			<-ctx.Done()
+			close(secondCanceled)
+		}
+		return preflight.DeviceProbe{}
+	}
+
+	firstDone := make(chan struct{})
+	go func() {
+		defer close(firstDone)
+		_, _ = app.DetectCompatibility(CompatibilityRequest{Port: "COM1", Baud: 460800})
+	}()
+	waitForTestSignal(t, firstStarted, "first detection to start")
+
+	secondDone := make(chan struct{})
+	go func() {
+		defer close(secondDone)
+		_, _ = app.DetectCompatibility(CompatibilityRequest{Port: "COM2", Baud: 460800})
+	}()
+	waitForTestSignal(t, firstCanceled, "second detection to cancel the first")
+	waitForTestSignal(t, secondStarted, "second detection to start")
+
+	close(allowFirstReturn)
+	waitForTestSignal(t, firstDone, "first detection to return")
+	select {
+	case <-secondCanceled:
+		t.Fatal("first detection cleanup canceled the active second detection")
+	default:
+	}
+
+	app.CancelCompatibilityDetection()
+	waitForTestSignal(t, secondCanceled, "explicit cancellation to stop the second detection")
+	waitForTestSignal(t, secondDone, "second detection to return")
+}
+
+func TestCancelCompatibilityDetectionIsIdempotent(t *testing.T) {
+	makeDetectedRuntimeAvailable(t)
+
+	app := NewApp()
+	app.cacheDir = t.TempDir()
+	app.current = &packagekit.Analysis{ProjectName: "firmware", CanFlash: true}
+	started := make(chan struct{})
+	canceled := make(chan struct{})
+	app.probeDevice = func(ctx context.Context, _ runtimekit.Status, _ string, _ int, _ func(string)) preflight.DeviceProbe {
+		close(started)
+		<-ctx.Done()
+		close(canceled)
+		return preflight.DeviceProbe{}
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = app.DetectCompatibility(CompatibilityRequest{Port: "COM7", Baud: 460800})
+	}()
+	waitForTestSignal(t, started, "detection to start")
+
+	app.CancelCompatibilityDetection()
+	app.CancelCompatibilityDetection()
+	waitForTestSignal(t, canceled, "detection cancellation")
+	waitForTestSignal(t, done, "detection to return")
+	app.CancelCompatibilityDetection()
+}
+
+func TestStartFlashCancelsCompatibilityDetectionBeforeEarlyReturn(t *testing.T) {
+	makeDetectedRuntimeAvailable(t)
+
+	app := NewApp()
+	app.cacheDir = t.TempDir()
+	app.current = &packagekit.Analysis{ProjectName: "firmware", CanFlash: true}
+	started := make(chan struct{})
+	canceled := make(chan struct{})
+	app.probeDevice = func(ctx context.Context, _ runtimekit.Status, _ string, _ int, _ func(string)) preflight.DeviceProbe {
+		close(started)
+		<-ctx.Done()
+		close(canceled)
+		return preflight.DeviceProbe{}
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = app.DetectCompatibility(CompatibilityRequest{Port: "COM7", Baud: 460800})
+	}()
+	waitForTestSignal(t, started, "detection to start")
+
+	app.mu.Lock()
+	app.current = nil
+	app.mu.Unlock()
+	if err := app.StartFlash(FlashRequest{Port: "COM7", Baud: 460800}); err == nil {
+		t.Fatal("StartFlash() error = nil, want missing analysis error")
+	}
+	waitForTestSignal(t, canceled, "StartFlash to cancel detection")
+	waitForTestSignal(t, done, "detection to return")
+}
+
 func TestMergeBuildAnalysisMetadataFillsEveryMissingField(t *testing.T) {
 	source := sourceAnalysisWithMetadata()
 	built := &packagekit.Analysis{}
@@ -338,6 +453,15 @@ func containsTestSubstring(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func waitForTestSignal(t *testing.T, signal <-chan struct{}, description string) {
+	t.Helper()
+	select {
+	case <-signal:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for %s", description)
+	}
 }
 
 func formatTestNumber(n int) string {

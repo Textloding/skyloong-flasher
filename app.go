@@ -27,14 +27,17 @@ const compatibilityDetectionTimeout = 50 * time.Second
 type probeDeviceFunc func(context.Context, runtimekit.Status, string, int, func(string)) preflight.DeviceProbe
 
 type App struct {
-	ctx         context.Context
-	mu          sync.Mutex
-	current     *packagekit.Analysis
-	probeDevice probeDeviceFunc
-	cacheDir    string
-	logMu       sync.Mutex
-	logHistory  []string
-	logFile     string
+	ctx             context.Context
+	mu              sync.Mutex
+	current         *packagekit.Analysis
+	probeDevice     probeDeviceFunc
+	preflightMu     sync.Mutex
+	preflightCancel context.CancelFunc
+	preflightToken  uint64
+	cacheDir        string
+	logMu           sync.Mutex
+	logHistory      []string
+	logFile         string
 }
 
 type AnalyzeResponse struct {
@@ -156,6 +159,9 @@ func (a *App) CheckRuntime() runtimekit.Status {
 }
 
 func (a *App) DetectCompatibility(req CompatibilityRequest) (*preflight.Report, error) {
+	ctx, cancel, token := a.beginCompatibilityDetection()
+	defer a.finishCompatibilityDetection(cancel, token)
+
 	a.mu.Lock()
 	analysis := a.current
 	a.mu.Unlock()
@@ -166,13 +172,6 @@ func (a *App) DetectCompatibility(req CompatibilityRequest) (*preflight.Report, 
 	if req.Port == "" {
 		return nil, fmt.Errorf("无法检测兼容性：请选择设备串口")
 	}
-
-	baseContext := a.ctx
-	if baseContext == nil {
-		baseContext = context.Background()
-	}
-	ctx, cancel := context.WithTimeout(baseContext, compatibilityDetectionTimeout)
-	defer cancel()
 
 	a.logLine(fmt.Sprintf("开始兼容性检测：端口=%s，波特率=%d", req.Port, req.Baud))
 	a.progress("兼容性检测", 5, "正在检查设备探测运行时")
@@ -200,6 +199,48 @@ func (a *App) DetectCompatibility(req CompatibilityRequest) (*preflight.Report, 
 	a.progress("兼容性检测", 100, "兼容性检测完成")
 	a.logLine("兼容性检测结束")
 	return &report, nil
+}
+
+func (a *App) CancelCompatibilityDetection() {
+	a.preflightMu.Lock()
+	cancel := a.preflightCancel
+	if cancel != nil {
+		a.preflightCancel = nil
+		a.preflightToken++
+	}
+	a.preflightMu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func (a *App) beginCompatibilityDetection() (context.Context, context.CancelFunc, uint64) {
+	baseContext := a.ctx
+	if baseContext == nil {
+		baseContext = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(baseContext, compatibilityDetectionTimeout)
+
+	a.preflightMu.Lock()
+	if a.preflightCancel != nil {
+		a.preflightCancel()
+	}
+	a.preflightToken++
+	token := a.preflightToken
+	a.preflightCancel = cancel
+	a.preflightMu.Unlock()
+
+	return ctx, cancel, token
+}
+
+func (a *App) finishCompatibilityDetection(cancel context.CancelFunc, token uint64) {
+	cancel()
+	a.preflightMu.Lock()
+	if a.preflightToken == token {
+		a.preflightCancel = nil
+	}
+	a.preflightMu.Unlock()
 }
 
 func (a *App) BuildSourcePackage() (*AnalyzeResponse, error) {
@@ -248,6 +289,8 @@ func (a *App) BuildSourcePackage() (*AnalyzeResponse, error) {
 }
 
 func (a *App) StartFlash(req FlashRequest) error {
+	a.CancelCompatibilityDetection()
+
 	a.mu.Lock()
 	analysis := a.current
 	a.mu.Unlock()

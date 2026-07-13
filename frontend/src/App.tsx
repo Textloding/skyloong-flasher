@@ -116,6 +116,7 @@ function App() {
   const preflightRequestRef = useRef(0);
   const preflightInputVersionRef = useRef(0);
   const preflightKeyRef = useRef("");
+  const preflightCancelChainRef = useRef<Promise<void>>(Promise.resolve());
   const preflightInputsRef = useRef<{ analysis: Analysis | null; selectedPort: string }>({ analysis: null, selectedPort: "" });
 
   useEffect(() => {
@@ -164,9 +165,20 @@ function App() {
     setPreflightError("");
     setPreflightDetectedAt(null);
 
-    if (analysis?.canFlash && selectedPort) {
-      void detectCompatibility(false, preflightInputVersionRef.current);
-    }
+    const inputVersion = preflightInputVersionRef.current;
+    void (async () => {
+      try {
+        await queueCompatibilityCancellation();
+      } catch (err) {
+        if (preflightInputVersionRef.current === inputVersion) {
+          setPreflightError(userFacingError(err));
+        }
+        return;
+      }
+      if (preflightInputVersionRef.current === inputVersion && analysis?.canFlash && selectedPort) {
+        await detectCompatibility(false, inputVersion);
+      }
+    })();
   }, [analysis, selectedPort]);
 
   const activeStep = useMemo(() => {
@@ -248,6 +260,12 @@ function App() {
     }
   }
 
+  function queueCompatibilityCancellation() {
+    const cancellation = preflightCancelChainRef.current.then(() => call<void>("CancelCompatibilityDetection"));
+    preflightCancelChainRef.current = cancellation.catch(() => undefined);
+    return cancellation;
+  }
+
   function isCurrentPreflightRequest(requestId: number, inputVersion: number, requestAnalysis: Analysis, requestPort: string) {
     const currentInputs = preflightInputsRef.current;
     return (
@@ -317,6 +335,9 @@ function App() {
   }
 
   async function flash() {
+    preflightRequestRef.current += 1;
+    preflightKeyRef.current = "";
+    setPreflightBusy(false);
     setBusy(true);
     setError("");
     setLogs((items) => [...items, "开始刷机任务。", "如果缺少刷机运行时，工具会自动准备。"]);
@@ -728,6 +749,7 @@ async function mockCall(name: string, ...args: any[]): Promise<any> {
   if (name === "BuildSourcePackage") {
     return mockCall("AnalyzeLocalZip", "preview.zip");
   }
+  if (name === "CancelCompatibilityDetection") return undefined;
   if (name === "DetectCompatibility") {
     return {
       overall: "unknown",
